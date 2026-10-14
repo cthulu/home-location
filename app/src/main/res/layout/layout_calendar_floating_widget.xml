@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background">
+
+    <!-- Confirmation message shown briefly after successful add -->
+    <TextView
+        android:id="@+id/tvConfirmation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="20dp"
+        android:text="✓ Added!"
+        android:textColor="@color/primary"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:visibility="gone"
+        android:singleLine="false"
+        android:lineSpacingExtra="4dp" />
+
+    <!-- Input row: text input for event title and datetime + buttons -->
+    <LinearLayout
+        android:id="@+id/layoutInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+
+        <!-- Event input field with hint examples -->
+        <EditText
+            android:id="@+id/etEventInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@null"
+            android:hint="e.g., Team sync tomorrow at 3pm"
+            android:textColorHint="@color/widget_hint"
+            android:textColor="@color/widget_text_primary"
+            android:textSize="16sp"
+            android:inputType="text"
+            android:imeOptions="actionDone"
+            android:maxLines="2" />
+
+        <!-- Parse status preview line (will show parsed datetime in later steps) -->
+        <TextView
+            android:id="@+id/tvParseStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="No date/time detected"
+            android:textColor="@color/widget_hint"
+            android:textSize="12sp"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
+
+        <!-- Action buttons row with calendar spinner and submit button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="end"
+            android:layout_marginTop="16dp">
+
+            <!-- Calendar selection spinner (only shown when multiple calendars available) -->
+            <Spinner
+                android:id="@+id/spinnerCalendars"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:visibility="gone"
+                android:background="@drawable/widget_background"
+                android:spinnerMode="dropdown" />
+
+            <ImageButton
+                android:id="@+id/btnSave"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/btn_send_background"
+                android:src="@drawable/ic_send"
+                android:contentDescription="Save event"
+                android:padding="8dp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

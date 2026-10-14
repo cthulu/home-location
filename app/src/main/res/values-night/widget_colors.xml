@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Floating widget colors — dark mode -->
+    <color name="widget_bg">#1F1F1F</color>
+    <color name="widget_text_primary">#EFEFEF</color>
+    <color name="widget_hint">#666666</color>
+    <color name="widget_divider">#2D2D2D</color>
+    <color name="widget_spinner_bg">#2D2D2D</color>
+    <color name="widget_spinner_stroke">#3D3D3D</color>
+    <color name="widget_spinner_text">#EFEFEF</color>
+    <color name="widget_dropdown_bg">#2D2D2D</color>
+    <color name="widget_dropdown_text">#EFEFEF</color>
+    <color name="widget_list_icon">#9E9E9E</color>
+</resources>

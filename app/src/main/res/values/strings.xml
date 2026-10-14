@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Home Location</string>
+    <string name="hint_enter_item">Enter item to add...</string>
+    <string name="btn_add">Add</string>
+    <string name="select_list">Select list</string>
+    <string name="shortcut_label">Quick Add</string>
+    <string name="shortcut_short_label">Add Item</string>
+    <string name="shortcut_long_label">Quick Add to Keep</string>
+    <string name="calendar_shortcut_label">Calendar Quick Add</string>
+    <string name="calendar_shortcut_short_label">Add Event</string>
+    <string name="calendar_shortcut_long_label">Quick Add to Calendar</string>
+</resources>

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Calendar body with rounded corners -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,24 L72,24 L78,30 a4,4 0 0 1,4 4 L78,84 a4,4 0 0 1,-4 4 L34,88 a4,4 0 0 1,-4 -4 L30,34 a4,4 0 0 1,4 -4 Z"/>
+
+    <!-- Top yellow header bar -->
+    <path
+        android:fillColor="#FBBC04"
+        android:pathData="M36,24 L72,24 L78,30 L78,42 L30,42 L30,30 Z"/>
+
+    <!-- Binding rings -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#333333"
+        android:strokeWidth="2"
+        android:pathData="M46,33 a5,5 0 1 0,10 0 a5,5 0 1 0,-10 0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#333333"
+        android:strokeWidth="2"
+        android:pathData="M62,33 a5,5 0 1 0,10 0 a5,5 0 1 0,-10 0"/>
+
+    <!-- Horizontal separator line below header -->
+    <path
+        android:strokeColor="#CCCCCC"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M32,46 L76,46"/>
+
+    <!-- Highlighted current date circle with plus sign -->
+    <path
+        android:fillColor="#FBBC04"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:pathData="M54,67 a14,14 0 1 0,28 0 a14,14 0 1 0,-28 0"/>
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M68,60 L68,74 M61,67 L75,67"/>
+</vector>

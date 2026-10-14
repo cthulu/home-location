@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Full-screen transparent container. The activity window fills the entire screen
+    (which is required for adjustResize to work — it shrinks this frame when the
+    keyboard appears, naturally pushing the card up). The card itself is gravity=bottom.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent"
+    android:fitsSystemWindows="false">
+
+    <!-- Dim overlay: tapping it dismisses the activity -->
+    <View
+        android:id="@+id/dimOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#66000000" />
+
+    <!-- The popup card, pinned to the bottom -->
+    <include
+        android:id="@+id/popupCard"
+        layout="@layout/layout_floating_widget"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom" />
+
+</FrameLayout>

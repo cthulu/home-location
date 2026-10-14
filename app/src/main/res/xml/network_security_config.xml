@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Allow cleartext HTTP traffic globally.
+        This app connects to a local/private backend (emulator, LAN, Tailscale).
+        If you switch to HTTPS, remove this config or set cleartextTrafficPermitted="false".
+    -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

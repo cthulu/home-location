@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand colors (same in both modes) -->
+    <color name="primary">#FBBC04</color>
+    <color name="primary_light">#FFF3CD</color>
+    <color name="primary_dark">#F9A825</color>
+
+    <!-- Light mode surface colors -->
+    <color name="surface">#FFFFFF</color>
+    <color name="on_surface">#1C1B1F</color>
+    <color name="on_surface_secondary">#49454F</color>
+    <color name="surface_variant">#F5F5F5</color>
+
+    <!-- Semantic aliases (light mode defaults) -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="gray_light">#F5F5F5</color>
+    <color name="gray">#9E9E9E</color>
+
+    <!-- Floating widget (always dark) -->
+    <color name="widget_bg_dark">#1F1F1F</color>
+    <color name="text_primary_dark">#EFEFEF</color>
+    <color name="hint_dark">#666666</color>
+    <color name="divider_dark">#2D2D2D</color>
+
+    <!-- Date/time highlight -->
+    <color name="date_highlight">#44FF5252</color>
+</resources>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Notepad/list icon -->
+    <group>
+        <!-- Paper background -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,24 L78,24 L78,84 L30,84 Z"/>
+        
+        <!-- Folded corner -->
+        <path
+            android:fillColor="#E0E0E0"
+            android:pathData="M66,24 L78,24 L78,36 Z"/>
+        
+        <!-- List lines -->
+        <path
+            android:strokeColor="#333333"
+            android:strokeWidth="3"
+            android:strokeLineCap="round"
+            android:pathData="M38,42 L70,42"/>
+        <path
+            android:strokeColor="#333333"
+            android:strokeWidth="3"
+            android:strokeLineCap="round"
+            android:pathData="M38,54 L70,54"/>
+        <path
+            android:strokeColor="#333333"
+            android:strokeWidth="3"
+            android:strokeLineCap="round"
+            android:pathData="M38,66 L58,66"/>
+        
+        <!-- Checkmarks -->
+        <path
+            android:strokeColor="#FBBC04"
+            android:strokeWidth="3"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M33,41 L35,43 L39,39"/>
+        <path
+            android:strokeColor="#FBBC04"
+            android:strokeWidth="3"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M33,53 L35,55 L39,51"/>
+    </group>
+    
+    <!-- Plus button circle -->
+    <path
+        android:fillColor="#FBBC04"
+        android:pathData="M72,72 m-14,0 a14,14 0,1 1,28 0 a14,14 0,1 1,-28 0"/>
+    
+    <!-- Plus sign -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M72,66 L72,78 M66,72 L78,72"/>
+</vector>
