@@ -1,7 +1,8 @@
 # Project Overview
-Quick Add is an Android app that:
-- allows creation of new entries in Google Keep lists using a simple floating window
-- allows creation of new calendar entries in Google Calendar using a simple floating window
+Home Location is an Android app that:
+- tracks device movement (activity recognition, Wi-Fi changes, travel distance)
+- publishes GPS coordinates to PubNub for a Home Assistant device tracker
+- battery-conscious: balanced tracking while stationary, high accuracy while moving
 
 # Build Commands
 - `./gradlew assembleDebug` - Build the debug version of the app.
