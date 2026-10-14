@@ -1,13 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Home Location</string>
-    <string name="hint_enter_item">Enter item to add...</string>
-    <string name="btn_add">Add</string>
-    <string name="select_list">Select list</string>
-    <string name="shortcut_label">Quick Add</string>
-    <string name="shortcut_short_label">Add Item</string>
-    <string name="shortcut_long_label">Quick Add to Keep</string>
-    <string name="calendar_shortcut_label">Calendar Quick Add</string>
-    <string name="calendar_shortcut_short_label">Add Event</string>
-    <string name="calendar_shortcut_long_label">Quick Add to Calendar</string>
+
+    <!-- Main screen -->
+    <string name="main_toolbar_title">Home Location</string>
+    <string name="main_description">Publishes your device location to PubNub while you are moving, for your Home Assistant device tracker.</string>
+    <string name="main_section_tracking">Tracking</string>
+    <string name="main_section_permissions">Permissions</string>
+    <string name="tracking_off">Tracking is off</string>
+    <string name="tracking_on">Tracking is on</string>
+    <string name="movement_state">Movement state: %1$s</string>
+    <string name="state_stationary">stationary</string>
+    <string name="state_moving">moving (high accuracy)</string>
+    <string name="last_published_never">Last published: never</string>
+    <string name="last_published">Last published: %1$s (accuracy %2$s m)</string>
+    <string name="pubnub_configured">PubNub: configured</string>
+    <string name="pubnub_not_configured">PubNub: not configured — add your keys in Settings</string>
+    <string name="btn_grant_permissions">Grant permissions</string>
+    <string name="btn_enable_tracking">Enable tracking</string>
+    <string name="btn_stop_tracking">Stop tracking</string>
+    <string name="btn_settings">Settings</string>
+    <string name="perm_system_location">System location switch</string>
+    <string name="perm_precise">Precise location</string>
+    <string name="perm_background">Background location</string>
+    <string name="perm_activity">Activity recognition</string>
+    <string name="perm_granted">granted</string>
+    <string name="perm_denied">not granted</string>
+    <string name="perm_off">off</string>
+    <string name="perm_not_applicable">not needed on this Android version</string>
+    <string name="battery_note">Tip: disable battery optimization for this app in system settings for most reliable background updates.</string>
+
+    <!-- Settings screen -->
+    <string name="settings_toolbar_title">Settings</string>
+    <string name="settings_section_pubnub">PubNub</string>
+    <string name="settings_pubnub_hint">Keys and channel from your PubNub Admin Portal. A separate subscriber forwards accepted locations to Home Assistant.</string>
+    <string name="settings_publish_key_label">Publish key</string>
+    <string name="settings_publish_key_hint">pub-c-…</string>
+    <string name="settings_subscribe_key_label">Subscribe key</string>
+    <string name="settings_subscribe_key_hint">sub-c-…</string>
+    <string name="settings_api_key_label">API / auth key (optional)</string>
+    <string name="settings_api_key_hint">only if PubNub Access Manager is enabled</string>
+    <string name="settings_channel_label">Channel</string>
+    <string name="settings_channel_hint">home-location</string>
+    <string name="settings_section_tracking">Tracking behavior</string>
+    <string name="settings_precise_mode_label">High accuracy while moving</string>
+    <string name="settings_precise_mode_hint">Uses GPS while moving (more battery), balanced accuracy while stationary.</string>
+    <string name="settings_max_accuracy_label">Maximum fix accuracy (m)</string>
+    <string name="settings_max_accuracy_hint">Fixes less accurate than this are not published.</string>
+    <string name="settings_min_interval_label">Minimum publish interval (s)</string>
+    <string name="settings_min_interval_hint">Floor between two published fixes.</string>
+    <string name="settings_min_distance_label">Minimum movement to publish (m)</string>
+    <string name="settings_min_distance_hint">A fix is published when you moved at least this far.</string>
+    <string name="settings_movement_detection_label">Movement detection threshold (m)</string>
+    <string name="settings_movement_detection_hint">Accumulated travel that switches tracking to high accuracy.</string>
+    <string name="settings_max_age_label">Maximum fix age (min)</string>
+    <string name="settings_max_age_hint">Older fixes are rejected.</string>
+    <string name="settings_periodic_label">Publish while stationary</string>
+    <string name="settings_periodic_hint">Optionally publish one fix per interval even without movement.</string>
+    <string name="settings_periodic_interval_label">Stationary publish interval (min)</string>
+    <string name="settings_burst_label">High-accuracy burst duration (min)</string>
+    <string name="settings_burst_hint">How long high accuracy stays active after the last movement evidence.</string>
+    <string name="btn_save">Save</string>
+    <string name="saved">Saved</string>
 </resources>

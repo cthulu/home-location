@@ -11,197 +11,297 @@
         android:orientation="vertical"
         android:padding="24dp">
 
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:layout_marginStart="-24dp"
+            android:layout_marginTop="-24dp"
+            android:layout_marginEnd="-24dp"
+            android:background="@color/primary"
+            app:title="@string/settings_toolbar_title"
+            app:titleTextColor="@color/black" />
+
         <!-- PubNub section -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="PubNub"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="4dp"
+            android:text="@string/settings_section_pubnub"
             android:textColor="@color/on_surface"
-            android:layout_marginBottom="4dp" />
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Publish key, subscribe key and (optional) auth/API key from your PubNub Admin Portal."
-            android:textSize="12sp"
+            android:layout_marginBottom="12dp"
+            android:text="@string/settings_pubnub_hint"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="12dp" />
+            android:textSize="12sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Publish key"
-            android:textSize="12sp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_publish_key_label"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="2dp" />
+            android:textSize="12sp" />
 
         <EditText
             android:id="@+id/etPublishKey"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/edittext_background"
-            android:hint="pub-c-..."
+            android:hint="@string/settings_publish_key_hint"
             android:inputType="textNoSuggestions"
             android:padding="12dp"
-            android:textSize="14sp"
             android:singleLine="true"
-            android:layout_marginBottom="12dp" />
+            android:textSize="14sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Subscribe key"
-            android:textSize="12sp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_subscribe_key_label"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="2dp" />
+            android:textSize="12sp" />
 
         <EditText
             android:id="@+id/etSubscribeKey"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/edittext_background"
-            android:hint="sub-c-..."
+            android:hint="@string/settings_subscribe_key_hint"
             android:inputType="textNoSuggestions"
             android:padding="12dp"
-            android:textSize="14sp"
             android:singleLine="true"
-            android:layout_marginBottom="12dp" />
+            android:textSize="14sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="API/auth key (optional)"
-            android:textSize="12sp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_api_key_label"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="2dp" />
+            android:textSize="12sp" />
 
         <EditText
             android:id="@+id/etApiKey"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/edittext_background"
-            android:hint="(blank if Access Manager not enabled)"
+            android:hint="@string/settings_api_key_hint"
             android:inputType="textPassword"
             android:padding="12dp"
-            android:textSize="14sp"
             android:singleLine="true"
-            android:layout_marginBottom="12dp" />
+            android:textSize="14sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Channel"
-            android:textSize="12sp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_channel_label"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="2dp" />
+            android:textSize="12sp" />
 
         <EditText
             android:id="@+id/etChannel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/edittext_background"
-            android:hint="channel-ha"
+            android:hint="@string/settings_channel_hint"
             android:inputType="textNoSuggestions"
             android:padding="12dp"
-            android:textSize="14sp"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/tvConnectionStatus"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textSize="12sp"
-            android:textColor="@color/on_surface_secondary" />
-
-        <Button
-            android:id="@+id/btnTestConnection"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Test Connection"
-            android:backgroundTint="@color/surface_variant"
-            android:textColor="@color/on_surface" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Calendars"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/on_surface"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/tvCalendarStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Loading calendars..."
-            android:textSize="12sp"
-            android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="4dp" />
-
-        <LinearLayout
-            android:id="@+id/calendarInputsContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical" />
-
-        <!-- Divider -->
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="@color/surface_variant"
             android:layout_marginTop="24dp"
-            android:layout_marginBottom="24dp" />
+            android:layout_marginBottom="16dp"
+            android:background="@color/surface_variant" />
 
-        <!-- Lists section -->
+        <!-- Tracking behavior section -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Keep Lists"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:layout_marginBottom="8dp"
+            android:text="@string/settings_section_tracking"
             android:textColor="@color/on_surface"
-            android:layout_marginBottom="4dp" />
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/swPreciseMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_precise_mode_label"
+            android:textSize="14sp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Names of Google Keep lists to add items to. The first entry is required and cannot be removed."
-            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_precise_mode_hint"
             android:textColor="@color/on_surface_secondary"
-            android:layout_marginBottom="12dp" />
+            android:textSize="12sp" />
 
         <LinearLayout
-            android:id="@+id/listInputsContainer"
+            style="@style/SettingsNumberRow">
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_max_accuracy_label" />
+
+                <EditText
+                    android:id="@+id/etMaxAccuracy"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="numberDecimal" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_min_interval_label" />
+
+                <EditText
+                    android:id="@+id/etMinInterval"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="number" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/SettingsNumberRow">
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_min_distance_label" />
+
+                <EditText
+                    android:id="@+id/etMinDistance"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="numberDecimal" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_movement_detection_label" />
+
+                <EditText
+                    android:id="@+id/etMovementDetection"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="numberDecimal" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/SettingsNumberRow">
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_max_age_label" />
+
+                <EditText
+                    android:id="@+id/etMaxAge"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="number" />
+                </LinearLayout>
+
+            <LinearLayout
+                style="@style/SettingsNumberField"
+                android:layout_weight="1">
+
+                <TextView
+                    style="@style/SettingsNumberLabel"
+                    android:text="@string/settings_burst_label" />
+
+                <EditText
+                    android:id="@+id/etBurst"
+                    style="@style/SettingsNumberInput"
+                    android:inputType="number" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/swPeriodicFallback"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:layout_marginTop="12dp"
+            android:text="@string/settings_periodic_label"
+            android:textSize="14sp" />
 
-        <Button
-            android:id="@+id/btnAddList"
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_periodic_hint"
+            android:textColor="@color/on_surface_secondary"
+            android:textSize="12sp" />
+
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="+ Add List"
-            android:backgroundTint="@color/surface_variant"
-            android:textColor="@color/on_surface" />
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_periodic_interval_label"
+            android:textColor="@color/on_surface_secondary"
+            android:textSize="12sp" />
 
-        <!-- Save button -->
+        <EditText
+            android:id="@+id/etPeriodicInterval"
+            android:layout_width="200dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/edittext_background"
+            android:inputType="number"
+            android:padding="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
         <Button
-            android:id="@+id/btnSaveUrl"
+            android:id="@+id/btnSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="32dp"
-            android:text="Save"
             android:backgroundTint="@color/primary"
+            android:text="@string/btn_save"
             android:textColor="@color/on_surface"
             android:textStyle="bold" />
 
-    </LinearLayout>
+        <TextView
+            android:id="@+id/tvSaved"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/saved"
+            android:textColor="@color/success"
+            android:visibility="gone" />
 
+    </LinearLayout>
 </ScrollView>

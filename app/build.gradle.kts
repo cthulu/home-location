@@ -61,8 +61,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
 
-    // Natural language date/time parsing
-    implementation("io.github.natty-parser:natty:1.1.2")
+    // Fused Location Provider and activity recognition
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     // Unit testing
     testImplementation("junit:junit:4.13.2")

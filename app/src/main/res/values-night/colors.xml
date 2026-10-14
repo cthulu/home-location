@@ -9,6 +9,7 @@
     <!-- Semantic aliases (dark mode overrides) -->
     <color name="white">#EFEFEF</color>
     <color name="black">#1C1C1E</color>
-    <color name="gray_light">#2C2C2E</color>
     <color name="gray">#8E8E93</color>
+    <color name="success">#66BB6A</color>
+    <color name="error">#EF5350</color>
 </resources>
