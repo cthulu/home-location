@@ -40,6 +40,8 @@ class LocationCoordinator(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var roamingPaused = false
 
     private val controller: MovementStateController
         get() = MovementStateController(
@@ -68,6 +70,7 @@ class LocationCoordinator(
         releaseWifiCallback()
         cancelBurstAlarm()
         cancelHeartbeatAlarm()
+        releaseNetworkCallback()
         settings.resetState()
     }
 
@@ -81,6 +84,8 @@ class LocationCoordinator(
             Log.w(TAG, "Registration skipped: location permissions missing")
             return
         }
+        registerNetworkCallback()
+        if (roamingPaused) return
         registerLocationUpdates()
         registerActivityRecognition()
         if (settings.movementState == MovementState.MOVING) scheduleBurstRevert()
@@ -95,7 +100,7 @@ class LocationCoordinator(
     // --- Evidence handlers (called from [LocationReceiver]) ---
 
     fun onLocationUpdates(locations: List<Location>) {
-        if (!settings.trackingEnabled) return
+        if (!settings.trackingEnabled || roamingPaused) return
         val now = clock()
         for (location in locations) {
             handleFix(location.toFix(), now)
@@ -153,6 +158,7 @@ class LocationCoordinator(
     }
 
     private fun publish(fix: LocationFix) {
+        if (roamingPaused) return
         if (!settings.isConfigured()) {
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
@@ -163,6 +169,7 @@ class LocationCoordinator(
         settings.lastPublishedTimeMs = fix.timeMs
         settings.lastPublishedAccuracyMeters = fix.accuracyMeters
         scope.launch {
+            if (roamingPaused) return@launch
             publisher.publish(fix)
                 .onSuccess { Log.i(TAG, "Location published (state=${settings.movementState})") }
                 .onFailure {
@@ -172,7 +179,7 @@ class LocationCoordinator(
     }
 
     fun onActivityUpdate(activityType: Int, timeMs: Long) {
-        if (!settings.trackingEnabled) return
+        if (!settings.trackingEnabled || roamingPaused) return
         val now = if (timeMs > 0) timeMs else clock()
         val decision = controller.observe(
             MovementEvidence.Activity(activityType, timeMs),
@@ -194,7 +201,7 @@ class LocationCoordinator(
     }
 
     fun onWifiLost() {
-        if (!settings.trackingEnabled) return
+        if (!settings.trackingEnabled || roamingPaused) return
         val now = clock()
         val decision = controller.observe(
             MovementEvidence.WifiLost,
@@ -213,7 +220,7 @@ class LocationCoordinator(
     }
 
     fun onBurstEnd() {
-        if (!settings.trackingEnabled) return
+        if (!settings.trackingEnabled || roamingPaused) return
         val decision = controller.burstExpired(
             settings.movementState,
             settings.lastMovementEvidenceTimeMs,
@@ -330,6 +337,56 @@ class LocationCoordinator(
         wifiCallback = null
         val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         runCatching { connectivity?.unregisterNetworkCallback(callback) }
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                super.onCapabilitiesChanged(network, capabilities)
+                updateRoamingState(isCellularRoaming(capabilities))
+            }
+
+            override fun onLost(network: Network) {
+                super.onLost(network)
+                updateRoamingState(false)
+            }
+        }
+        networkCallback = callback
+        runCatching { connectivity.registerDefaultNetworkCallback(callback) }
+            .onFailure {
+                networkCallback = null
+                Log.w(TAG, "Failed to register network callback", it)
+            }
+    }
+
+    private fun releaseNetworkCallback() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        runCatching { connectivity?.unregisterNetworkCallback(callback) }
+    }
+
+    private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean =
+        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+
+    private fun updateRoamingState(roaming: Boolean) {
+        if (roamingPaused == roaming) return
+        roamingPaused = roaming
+        if (roaming) {
+            Log.i(TAG, "Roaming detected; pausing location tracking and publishing")
+            removeLocationRegistration()
+            removeActivityRegistration()
+            releaseWifiCallback()
+            cancelBurstAlarm()
+            cancelHeartbeatAlarm()
+        } else if (settings.trackingEnabled) {
+            Log.i(TAG, "Roaming ended; resuming location tracking and publishing")
+            ensureRegistered()
+        }
     }
 
     // --- Alarm helpers ---
