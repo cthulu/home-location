@@ -120,6 +120,42 @@
             android:singleLine="true"
             android:textSize="14sp" />
 
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/swBackgroundLocation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_background_location_label"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_background_location_hint"
+            android:textColor="@color/on_surface_secondary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_background_interval_label"
+            android:textColor="@color/on_surface_secondary"
+            android:textSize="12sp" />
+
+        <EditText
+            android:id="@+id/etBackgroundInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/edittext_background"
+            android:hint="@string/settings_background_interval_hint"
+            android:inputType="number"
+            android:padding="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

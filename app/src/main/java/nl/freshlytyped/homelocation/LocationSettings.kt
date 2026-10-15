@@ -26,6 +26,8 @@ class LocationSettings(context: Context) {
         private const val KEY_PERIODIC_FALLBACK_ENABLED = "periodic_fallback_enabled"
         private const val KEY_PERIODIC_FALLBACK_INTERVAL = "periodic_fallback_interval_ms"
         private const val KEY_BURST_DURATION = "burst_duration_ms"
+        private const val KEY_BACKGROUND_LOCATION_ENABLED = "background_location_enabled"
+        private const val KEY_BACKGROUND_SCAN_INTERVAL = "background_scan_interval_ms"
         private const val KEY_MOVEMENT_STATE = "movement_state"
         private const val KEY_LAST_KNOWN_LAT = "last_known_lat"
         private const val KEY_LAST_KNOWN_LON = "last_known_lon"
@@ -112,6 +114,15 @@ class LocationSettings(context: Context) {
     var burstDurationMs: Long
         get() = prefs.getLong(KEY_BURST_DURATION, 10 * MINUTE_MS)
         set(value) = prefs.edit().putLong(KEY_BURST_DURATION, value).apply()
+
+    var backgroundLocationEnabled: Boolean
+        get() = prefs.getBoolean(KEY_BACKGROUND_LOCATION_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_BACKGROUND_LOCATION_ENABLED, value).apply()
+
+    /** Stationary/background scan interval. */
+    var backgroundScanIntervalMs: Long
+        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 5 * MINUTE_MS)
+        set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
 
     fun isConfigured(): Boolean =
         publishKey.isNotBlank() && subscribeKey.isNotBlank()

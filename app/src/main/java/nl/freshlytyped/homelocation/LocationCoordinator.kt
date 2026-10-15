@@ -42,6 +42,7 @@ class LocationCoordinator(
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var roamingPaused = false
+    @Volatile private var appInForeground = false
 
     private val controller: MovementStateController
         get() = MovementStateController(
@@ -86,6 +87,14 @@ class LocationCoordinator(
         }
         registerNetworkCallback()
         if (roamingPaused) return
+        if (!appInForeground && !settings.backgroundLocationEnabled) {
+            removeLocationRegistration()
+            removeActivityRegistration()
+            releaseWifiCallback()
+            cancelBurstAlarm()
+            cancelHeartbeatAlarm()
+            return
+        }
         registerLocationUpdates()
         registerActivityRecognition()
         if (settings.movementState == MovementState.MOVING) scheduleBurstRevert()
@@ -94,6 +103,16 @@ class LocationCoordinator(
     }
 
     fun onHeartbeat() {
+        ensureRegistered()
+    }
+
+    fun onAppForegrounded() {
+        appInForeground = true
+        ensureRegistered()
+    }
+
+    fun onAppBackgrounded() {
+        appInForeground = false
         ensureRegistered()
     }
 
@@ -285,7 +304,8 @@ class LocationCoordinator(
         val request = requestFactory.forState(
             settings.movementState,
             settings.preciseMode,
-            permissions.fineGranted()
+            permissions.fineGranted(),
+            settings.backgroundScanIntervalMs
         )
         runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
             .onFailure { Log.w(TAG, "Failed to register location updates", it) }

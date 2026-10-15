@@ -11,6 +11,16 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySettingsBinding
     private val settings get() = (application as App).locationSettings
 
+    override fun onStart() {
+        super.onStart()
+        (application as App).locationCoordinator.onAppForegrounded()
+    }
+
+    override fun onStop() {
+        (application as App).locationCoordinator.onAppBackgrounded()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivitySettingsBinding.inflate(layoutInflater)
@@ -41,6 +51,8 @@ class SettingsActivity : AppCompatActivity() {
         binding.swPeriodicFallback.isChecked = settings.periodicFallbackEnabled
         binding.etPeriodicInterval.setText(numberOf(settings.periodicFallbackIntervalMs / 60_000))
         binding.etBurst.setText(numberOf(settings.burstDurationMs / 60_000))
+        binding.swBackgroundLocation.isChecked = settings.backgroundLocationEnabled
+        binding.etBackgroundInterval.setText(numberOf(settings.backgroundScanIntervalMs / 60_000))
     }
 
     private fun saveFromForm() {
@@ -67,6 +79,10 @@ class SettingsActivity : AppCompatActivity() {
         )
         settings.burstDurationMs =
             parseMinutes(binding.etBurst.text.toString(), settings.burstDurationMs)
+        settings.backgroundLocationEnabled = binding.swBackgroundLocation.isChecked
+        settings.backgroundScanIntervalMs = parseMinutes(
+            binding.etBackgroundInterval.text.toString(), settings.backgroundScanIntervalMs
+        )
     }
 
     private fun numberOf(value: Number): String =

@@ -17,7 +17,8 @@ class LocationRequestFactory {
     fun forState(
         state: MovementState,
         preciseMode: Boolean,
-        fineLocationGranted: Boolean
+        fineLocationGranted: Boolean,
+        stationaryIntervalMs: Long = STATIONARY_INTERVAL_MS
     ): LocationRequest {
         val highAccuracy = state == MovementState.MOVING && preciseMode && fineLocationGranted
         return if (highAccuracy) {
@@ -26,9 +27,10 @@ class LocationRequestFactory {
                 .setMaxUpdateDelayMillis(MOVING_MAX_DELAY_MS)
                 .build()
         } else {
-            LocationRequest.Builder(STATIONARY_INTERVAL_MS)
+            val interval = stationaryIntervalMs.coerceIn(MIN_STATIONARY_INTERVAL_MS, MAX_STATIONARY_INTERVAL_MS)
+            LocationRequest.Builder(interval)
                 .setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-                .setMaxUpdateDelayMillis(STATIONARY_MAX_DELAY_MS)
+                .setMaxUpdateDelayMillis(interval * 3)
                 .build()
         }
     }
@@ -38,5 +40,7 @@ class LocationRequestFactory {
         const val MOVING_MAX_DELAY_MS = 60_000L
         const val STATIONARY_INTERVAL_MS = 60_000L
         const val STATIONARY_MAX_DELAY_MS = 180_000L
+        const val MIN_STATIONARY_INTERVAL_MS = 60_000L
+        const val MAX_STATIONARY_INTERVAL_MS = 60 * 60_000L
     }
 }

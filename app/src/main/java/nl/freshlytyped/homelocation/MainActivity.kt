@@ -55,6 +55,16 @@ class MainActivity : AppCompatActivity() {
         updateUi()
     }
 
+    override fun onStart() {
+        super.onStart()
+        app.locationCoordinator.onAppForegrounded()
+    }
+
+    override fun onStop() {
+        app.locationCoordinator.onAppBackgrounded()
+        super.onStop()
+    }
+
     private fun requestTrackingPermissions() {
         val first = permissions.firstRequestPermissions()
         if (first.isNotEmpty()) {
