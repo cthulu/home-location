@@ -9,7 +9,11 @@ import android.app.Application
  */
 class App : Application() {
 
-    val locationSettings = LocationSettings(this)
+    /**
+     * Lazy: [Application] is constructed before [attachBaseContext], so the
+     * context must not be touched in a property initializer.
+     */
+    val locationSettings by lazy { LocationSettings(this) }
 
     val locationCoordinator: LocationCoordinator by lazy {
         LocationCoordinator(
