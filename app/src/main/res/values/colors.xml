@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Brand colors (same in both modes) -->
-    <color name="primary">#FBBC04</color>
-    <color name="primary_light">#FFF3CD</color>
-    <color name="primary_dark">#F9A825</color>
+    <color name="primary">#1976D2</color>
+    <color name="primary_light">#D7E9FC</color>
+    <color name="primary_dark">#0D47A1</color>
 
     <!-- Light mode surface colors -->
     <color name="surface">#FFFFFF</color>

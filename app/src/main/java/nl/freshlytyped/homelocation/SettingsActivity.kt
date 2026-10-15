@@ -30,6 +30,9 @@ class SettingsActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
 
         loadIntoForm()
+        binding.swPreciseMode.setOnCheckedChangeListener { _, enabled ->
+            setPreciseInputsEnabled(enabled)
+        }
         binding.btnSave.setOnClickListener {
             saveFromForm()
             binding.tvSaved.visibility = View.VISIBLE
@@ -53,6 +56,21 @@ class SettingsActivity : AppCompatActivity() {
         binding.etBurst.setText(numberOf(settings.burstDurationMs / 60_000))
         binding.swBackgroundLocation.isChecked = settings.backgroundLocationEnabled
         binding.etBackgroundInterval.setText(numberOf(settings.backgroundScanIntervalMs / 1000))
+        setPreciseInputsEnabled(settings.preciseMode)
+    }
+
+    private fun setPreciseInputsEnabled(enabled: Boolean) {
+        listOf(
+            binding.etMaxAccuracy,
+            binding.etMinInterval,
+            binding.etMinDistance,
+            binding.etMovementDetection,
+            binding.etMaxAge,
+            binding.etBurst
+        ).forEach {
+            it.isEnabled = enabled
+            it.alpha = if (enabled) 1f else 0.5f
+        }
     }
 
     private fun saveFromForm() {
