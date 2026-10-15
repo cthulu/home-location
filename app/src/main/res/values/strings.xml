@@ -44,8 +44,8 @@
     <string name="settings_channel_hint">home-location</string>
     <string name="settings_background_location_label">Allow background location collection</string>
     <string name="settings_background_location_hint">When disabled, location is collected only while the app is open.</string>
-    <string name="settings_background_interval_label">Background scan interval (minutes)</string>
-    <string name="settings_background_interval_hint">5</string>
+    <string name="settings_background_interval_label">Background scan interval (seconds)</string>
+    <string name="settings_background_interval_hint">60</string>
     <string name="settings_section_tracking">Tracking behavior</string>
     <string name="settings_precise_mode_label">High accuracy while moving</string>
     <string name="settings_precise_mode_hint">Uses GPS while moving (more battery), balanced accuracy while stationary.</string>

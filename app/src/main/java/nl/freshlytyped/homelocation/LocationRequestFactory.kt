@@ -40,7 +40,7 @@ class LocationRequestFactory {
         const val MOVING_MAX_DELAY_MS = 60_000L
         const val STATIONARY_INTERVAL_MS = 60_000L
         const val STATIONARY_MAX_DELAY_MS = 180_000L
-        const val MIN_STATIONARY_INTERVAL_MS = 60_000L
-        const val MAX_STATIONARY_INTERVAL_MS = 60 * 60_000L
+        const val MIN_STATIONARY_INTERVAL_MS = 30_000L
+        const val MAX_STATIONARY_INTERVAL_MS = 600_000L
     }
 }

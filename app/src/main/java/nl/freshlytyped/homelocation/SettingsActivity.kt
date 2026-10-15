@@ -52,7 +52,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.etPeriodicInterval.setText(numberOf(settings.periodicFallbackIntervalMs / 60_000))
         binding.etBurst.setText(numberOf(settings.burstDurationMs / 60_000))
         binding.swBackgroundLocation.isChecked = settings.backgroundLocationEnabled
-        binding.etBackgroundInterval.setText(numberOf(settings.backgroundScanIntervalMs / 60_000))
+        binding.etBackgroundInterval.setText(numberOf(settings.backgroundScanIntervalMs / 1000))
     }
 
     private fun saveFromForm() {
@@ -80,7 +80,7 @@ class SettingsActivity : AppCompatActivity() {
         settings.burstDurationMs =
             parseMinutes(binding.etBurst.text.toString(), settings.burstDurationMs)
         settings.backgroundLocationEnabled = binding.swBackgroundLocation.isChecked
-        settings.backgroundScanIntervalMs = parseMinutes(
+        settings.backgroundScanIntervalMs = parseBackgroundSeconds(
             binding.etBackgroundInterval.text.toString(), settings.backgroundScanIntervalMs
         )
     }
@@ -96,5 +96,10 @@ class SettingsActivity : AppCompatActivity() {
     private fun parseMinutes(text: String, currentMs: Long): Long {
         val minutes = text.toLongOrNull() ?: return currentMs
         return (minutes * 60_000).coerceIn(30_000L, 24 * 3600_000L)
+    }
+
+    private fun parseBackgroundSeconds(text: String, currentMs: Long): Long {
+        val seconds = text.toLongOrNull() ?: return currentMs
+        return (seconds * 1000).coerceIn(30_000L, 600_000L)
     }
 }

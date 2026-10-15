@@ -121,7 +121,7 @@ class LocationSettings(context: Context) {
 
     /** Stationary/background scan interval. */
     var backgroundScanIntervalMs: Long
-        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 5 * MINUTE_MS)
+        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 60_000L)
         set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
 
     fun isConfigured(): Boolean =

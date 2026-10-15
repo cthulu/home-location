@@ -37,4 +37,15 @@ class LocationRequestFactoryTest {
         assertEquals(60_000L, request.interval)
         assertEquals(180_000L, request.maxUpdateDelayMillis)
     }
+
+    @Test
+    fun `stationary interval is clamped to the supported range`() {
+        val tooShort = factory.forState(MovementState.STATIONARY, true, true, 1_000L)
+        val tooLong = factory.forState(MovementState.STATIONARY, true, true, 900_000L)
+
+        assertEquals(30_000L, tooShort.interval)
+        assertEquals(90_000L, tooShort.maxUpdateDelayMillis)
+        assertEquals(600_000L, tooLong.interval)
+        assertEquals(1_800_000L, tooLong.maxUpdateDelayMillis)
+    }
 }
