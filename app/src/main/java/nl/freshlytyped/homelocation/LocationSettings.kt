@@ -127,11 +127,11 @@ class LocationSettings(context: Context) {
         set(value) = prefs.edit().putString(KEY_MOVEMENT_STATE, value.name).apply()
 
     var lastKnownLat: Double
-        get() = prefs.getLong(KEY_LAST_KNOWN_LAT, 0L).toDouble()
+        get() = prefs.getLong(KEY_LAST_KNOWN_LAT, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_KNOWN_LAT, (value * 1e7).toLong()).apply()
 
     var lastKnownLon: Double
-        get() = prefs.getLong(KEY_LAST_KNOWN_LON, 0L).toDouble()
+        get() = prefs.getLong(KEY_LAST_KNOWN_LON, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_KNOWN_LON, (value * 1e7).toLong()).apply()
 
     var lastKnownTimeMs: Long
@@ -139,11 +139,11 @@ class LocationSettings(context: Context) {
         set(value) = prefs.edit().putLong(KEY_LAST_KNOWN_TIME, value).apply()
 
     var lastPublishedLat: Double
-        get() = prefs.getLong(KEY_LAST_PUBLISHED_LAT, 0L).toDouble()
+        get() = prefs.getLong(KEY_LAST_PUBLISHED_LAT, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_PUBLISHED_LAT, (value * 1e7).toLong()).apply()
 
     var lastPublishedLon: Double
-        get() = prefs.getLong(KEY_LAST_PUBLISHED_LON, 0L).toDouble()
+        get() = prefs.getLong(KEY_LAST_PUBLISHED_LON, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_PUBLISHED_LON, (value * 1e7).toLong()).apply()
 
     var lastPublishedTimeMs: Long
