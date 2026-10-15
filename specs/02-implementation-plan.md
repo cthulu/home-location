@@ -14,7 +14,9 @@ Add settings for:
 
 - PubNub publish key, subscribe key, optional API key, and channel.
 - Tracking enabled state.
-- Precise versus balanced mode.
+- Background location collection enabled state (default enabled).
+- Background/stationary scan interval in seconds (30–600 seconds, default 60 seconds).
+- Precise versus balanced mode. Precise mode enables high-accuracy moving requests when fine permission is available; disabling it uses balanced power accuracy.
 - Minimum acceptable accuracy.
 - Minimum publish interval.
 - Minimum movement distance.
@@ -24,11 +26,13 @@ Do not store a Home Assistant access token in this app.
 
 ## Phase 3: movement-aware location
 
-- Register activity recognition while tracking is enabled.
+- Register activity recognition while tracking is enabled and collection is allowed by the foreground/background policy.
 - Register a `ConnectivityManager.NetworkCallback` for Wi-Fi changes where appropriate.
-- On movement or Wi-Fi loss, request a precise fix or start the short foreground-service burst.
+- Register a default-network callback and pause all collection and new publishing while cellular roaming is active.
+- On movement or Wi-Fi loss, request a precise fix when precise mode and fine permission are enabled; otherwise use balanced power accuracy.
 - Stop high-accuracy updates after a stationary timeout.
-- Retain a balanced fallback request with a practical 1–5 minute target, subject to Android throttling.
+- Retain a balanced fallback request using the configured 30–600 second background interval, subject to Android throttling.
+- When background collection is disabled, keep registrations only while the app is foregrounded.
 
 ## Phase 4: publication
 

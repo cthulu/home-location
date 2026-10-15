@@ -59,15 +59,20 @@ The Home Assistant Android repository is Apache-2.0 licensed. If implementation 
 
 Precise location is based on the same Google Play services fused-location technology used by Google Maps, but Google Maps has proprietary scheduling and optimization. `PRIORITY_HIGH_ACCURACY` can use GPS, Wi-Fi, cellular signals, and sensors and can drain considerably more battery. It should not be used continuously in the background without a foreground service.
 
-The default design should combine:
+The implemented design combines:
 
 1. Low-power activity recognition to identify walking, cycling, or driving.
 2. Wi-Fi network loss as an opportunistic movement trigger.
 3. A short precise-location burst when movement is suspected.
 4. A stationary timeout that stops precise requests.
-5. A periodic fallback so the location does not become indefinitely stale.
+5. A configurable stationary/background scan interval.
+6. An optional periodic fallback so the location does not become indefinitely stale.
 
-The desired freshness is approximately 1–5 minutes while moving. Android background execution, vendor battery management, and permission state can prevent a strict guarantee without a foreground location service.
+The moving request uses high accuracy at a 30-second interval with a 60-second maximum delay when precise mode and fine permission are available. Stationary/background requests use a configurable interval from 30–600 seconds, defaulting to 60 seconds, with batching up to three times the interval. Android background execution, vendor battery management, and permission state can prevent strict delivery guarantees.
+
+The user can disable background location collection. When disabled, location and activity detection remain active while an app activity is visible and are removed when the app enters the background. When enabled, the PendingIntent-based registrations continue in the background.
+
+The coordinator pauses location detection, activity recognition, alarms, and new publishing while the active network is a roaming cellular network. Registrations resume when roaming ends. Wi-Fi and non-cellular networks are not considered roaming.
 
 ## Wi-Fi disconnect limitations
 
@@ -88,8 +93,7 @@ The app will need:
 - `ACCESS_FINE_LOCATION` for precise mode
 - `ACCESS_BACKGROUND_LOCATION` for ongoing background tracking
 - `ACTIVITY_RECOGNITION` for movement detection
-- `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_LOCATION` if precise foreground tracking is enabled
-- `POST_NOTIFICATIONS` when required for the foreground-service notification
+- A foreground service is not part of the current v1 implementation; it remains a possible future enhancement for sustained precise tracking.
 
 On Android 11 and later, foreground location permission should be granted before requesting background location. Android 12 and later let users downgrade an app to approximate location, so the app must detect and explain insufficient precision.
 
@@ -102,8 +106,8 @@ On Android 11 and later, foreground location permission should be granted before
 - `LocationReceiver`: receives batched PendingIntent updates.
 - `LocationFilter`: validates, selects, and deduplicates fixes.
 - `LocationPublisher`: publishes the location payload to PubNub.
-- `PreciseLocationService`: optional foreground service for an active movement burst.
+- Foreground activity lifecycle hooks for foreground-only collection when background collection is disabled.
 
 ## Testing requirements
 
-Unit-test coordinate validation, accuracy filtering, stale-fix rejection, duplicate suppression, payload serialization, and PubNub error handling. Device-test permission flows, reboot recovery, Wi-Fi transitions, activity transitions, battery optimization, Android 8–current behavior, and vendor-specific restrictions.
+Unit-test coordinate validation, accuracy filtering, stale-fix rejection, duplicate suppression, payload serialization, PubNub error handling, configurable request bounds, and persisted settings. Device-test permission flows, reboot recovery, foreground-only mode, background interval cadence, roaming transitions, Wi-Fi transitions, activity transitions, battery optimization, Android 8–current behavior, and vendor-specific restrictions.
