@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -36,7 +37,15 @@ class MainActivity : AppCompatActivity() {
             if (app.locationSettings.trackingEnabled) {
                 app.locationCoordinator.stop()
             } else if (permissions.trackingAllowed()) {
-                app.locationCoordinator.start()
+                if (app.locationSettings.isConfigured()) {
+                    app.locationCoordinator.start()
+                } else {
+                    Toast.makeText(
+                        this,
+                        R.string.tracking_requires_configuration,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             } else {
                 requestTrackingPermissions()
             }
