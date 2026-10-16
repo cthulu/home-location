@@ -68,7 +68,7 @@ The implemented design combines:
 5. A configurable stationary/background scan interval.
 6. An optional periodic fallback so the location does not become indefinitely stale.
 
-The moving request uses high accuracy at a 30-second interval with a 60-second maximum delay when precise mode and fine permission are available. Stationary/background requests use a configurable interval from 30–600 seconds, defaulting to 60 seconds, with batching up to three times the interval. Android background execution, vendor battery management, and permission state can prevent strict delivery guarantees.
+The moving request uses high accuracy at a 30-second interval with a 60-second maximum delay when precise mode and fine permission are available. Stationary/background requests use a configurable interval from 30–600 seconds, defaulting to 60 seconds, with batching up to three times the interval. When stationary publishing is enabled, a separate alarm requests a fresh location and publishes it at the configured fallback interval; this does not depend on the fused provider delivering a continuous stream of fixes. Android background execution, vendor battery management, and permission state can prevent strict delivery guarantees.
 
 The user can disable background location collection. When disabled, location and activity detection remain active while an app activity is visible and are removed when the app enters the background. When enabled, the PendingIntent-based registrations continue in the background.
 
@@ -107,6 +107,8 @@ On Android 11 and later, foreground location permission should be granted before
 - `LocationFilter`: validates, selects, and deduplicates fixes.
 - `LocationPublisher`: publishes the location payload to PubNub.
 - Foreground activity lifecycle hooks for foreground-only collection when background collection is disabled.
+
+On Android 12 and later, the explicit `PendingIntent` used for fused-location and activity-recognition delivery is mutable because Google Play services adds the result data to the intent. Alarm intents remain immutable.
 
 ## Testing requirements
 

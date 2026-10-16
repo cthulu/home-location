@@ -32,6 +32,7 @@ Do not store a Home Assistant access token in this app.
 - On movement or Wi-Fi loss, request a precise fix when precise mode and fine permission are enabled; otherwise use balanced power accuracy.
 - Stop high-accuracy updates after a stationary timeout.
 - Retain a balanced fallback request using the configured 30–600 second background interval, subject to Android throttling.
+- When stationary fallback publishing is enabled, schedule an alarm at the configured fallback interval and request a one-shot fix for publication; do not rely solely on continuous location callbacks.
 - When background collection is disabled, keep registrations only while the app is foregrounded.
 
 ## Phase 4: publication
@@ -39,6 +40,7 @@ Do not store a Home Assistant access token in this app.
 - Select the newest valid fix with acceptable accuracy.
 - Reject invalid, future, stale, or materially duplicated fixes.
 - Publish both coordinates in one JSON message.
+- Use the documented `location` payload contract: six-decimal coordinates, one-decimal accuracy (or `null`), and the Android fix timestamp in epoch milliseconds.
 - Retry transient network failures with bounded backoff.
 - Never log coordinates, credentials, or access tokens.
 
