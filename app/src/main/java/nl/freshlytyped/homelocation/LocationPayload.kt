@@ -13,8 +13,9 @@ object LocationPayload {
     const val TYPE = "location"
 
     /** Coordinates are rounded to 6 decimals to match the Home Assistant helper step. */
-    fun build(fix: LocationFix): String = JSONObject()
+    fun build(fix: LocationFix, deviceName: String): String = JSONObject()
         .put("type", TYPE)
+        .put("device_name", deviceName)
         .put("latitude", round6(fix.latitude))
         .put("longitude", round6(fix.longitude))
         .put("accuracy", if (fix.accuracyMeters.isFinite()) round1(fix.accuracyMeters) else JSONObject.NULL)

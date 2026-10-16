@@ -26,6 +26,7 @@ class LocationSettingsTest {
     @Test
     fun `defaults match the documented tunables`() {
         assertEquals("home-location", settings.channel)
+        assertTrue(settings.deviceName.isNotBlank())
         assertEquals(50f, settings.maxAccuracyMeters)
         assertEquals(60_000L, settings.minPublishIntervalMs)
         assertEquals(50f, settings.minDistanceMeters)
@@ -51,6 +52,12 @@ class LocationSettingsTest {
     fun `credentials are trimmed on save`() {
         settings.publishKey = "  pub-c  "
         assertEquals("pub-c", settings.publishKey)
+    }
+
+    @Test
+    fun `device name is persisted and trimmed`() {
+        settings.deviceName = "  Pixel 8  "
+        assertEquals("Pixel 8", settings.deviceName)
     }
 
     @Test

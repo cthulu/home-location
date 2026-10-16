@@ -44,6 +44,8 @@
     <string name="settings_api_key_hint">only if PubNub Access Manager is enabled</string>
     <string name="settings_channel_label">Channel</string>
     <string name="settings_channel_hint">home-location</string>
+    <string name="settings_device_name_label">Device name</string>
+    <string name="settings_device_name_hint">Android device name</string>
     <string name="settings_background_location_label">Allow background location collection</string>
     <string name="settings_background_location_hint">When disabled, location is collected only while the app is open.</string>
     <string name="settings_background_interval_label">Background scan interval (seconds)</string>

@@ -17,12 +17,15 @@ The location app publishes one message containing both coordinates:
 ```json
 {
   "type": "location",
+  "device_name": "Pixel 8",
   "latitude": 52.123456,
   "longitude": 5.123456,
   "accuracy": 18,
   "timestamp": 1760000000000
 }
 ```
+
+`device_name` is the configurable Android device name included in every location message.
 
 The `type` field allows the existing or shared channel to carry both location and Keep messages. A separate channel is configurable and recommended by default. The Home Assistant API token belongs in the separate consumer service, not in this mobile app or the PubNub payload.
 
