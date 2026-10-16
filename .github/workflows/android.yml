@@ -33,29 +33,29 @@ jobs:
         name: unsigned-apk
         path: app/build/outputs/apk/release/app-release-unsigned.apk
   
-  sign:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: sign-release
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: unsigned-apk
-          path: unsigned
+  # sign:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   environment: sign-release
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: unsigned-apk
+  #         path: unsigned
 
-      - name: Sign APK
-        id: sign_apk
-        uses: ilharp/sign-android-release@v2
-        with:
-          releaseDir: app/build/outputs/apk/release
-          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
-          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
+  #     - name: Sign APK
+  #       id: sign_apk
+  #       uses: ilharp/sign-android-release@v2
+  #       with:
+  #         releaseDir: app/build/outputs/apk/release
+  #         signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
+  #         keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
+  #         keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  #         keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+  #         buildToolsVersion: 36.0.0
 
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk
-          path: ${{ steps.sign_apk.outputs.signedFile }}
+  #     - name: Upload signed APK
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: release-apk
+  #         path: ${{ steps.sign_apk.outputs.signedFile }}
