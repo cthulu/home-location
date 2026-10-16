@@ -37,6 +37,7 @@ class LocationReceiver : BroadcastReceiver() {
 
             ACTION_BURST_END -> coordinator.onBurstEnd()
             ACTION_HEARTBEAT -> coordinator.onHeartbeat()
+            ACTION_PERIODIC_PUBLISH -> coordinator.onPeriodicPublish()
         }
     }
 
@@ -50,5 +51,6 @@ class LocationReceiver : BroadcastReceiver() {
         const val ACTION_ACTIVITY_UPDATE = "nl.freshlytyped.homelocation.ACTION_ACTIVITY_UPDATE"
         const val ACTION_BURST_END = "nl.freshlytyped.homelocation.ACTION_BURST_END"
         const val ACTION_HEARTBEAT = "nl.freshlytyped.homelocation.ACTION_HEARTBEAT"
+        const val ACTION_PERIODIC_PUBLISH = "nl.freshlytyped.homelocation.ACTION_PERIODIC_PUBLISH"
     }
 }

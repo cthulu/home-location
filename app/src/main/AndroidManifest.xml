@@ -59,6 +59,7 @@
                 <action android:name="nl.freshlytyped.homelocation.ACTION_ACTIVITY_UPDATE" />
                 <action android:name="nl.freshlytyped.homelocation.ACTION_BURST_END" />
                 <action android:name="nl.freshlytyped.homelocation.ACTION_HEARTBEAT" />
+                <action android:name="nl.freshlytyped.homelocation.ACTION_PERIODIC_PUBLISH" />
             </intent-filter>
         </receiver>
 
