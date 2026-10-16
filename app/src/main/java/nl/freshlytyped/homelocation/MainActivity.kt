@@ -36,9 +36,12 @@ class MainActivity : AppCompatActivity() {
         binding.btnToggleTracking.setOnClickListener {
             if (app.locationSettings.trackingEnabled) {
                 app.locationCoordinator.stop()
-            } else if (permissions.trackingAllowed()) {
+            } else if (permissions.foregroundTrackingAllowed()) {
                 if (app.locationSettings.isConfigured()) {
                     app.locationCoordinator.start()
+                    // Foreground permission starts tracking, but background
+                    // updates additionally require ACCESS_BACKGROUND_LOCATION.
+                    requestBackgroundPermission()
                 } else {
                     Toast.makeText(
                         this,
@@ -96,7 +99,7 @@ class MainActivity : AppCompatActivity() {
     private fun onPermissionsResult(granted: Map<String, Boolean>) {
         if (awaitingBackgroundPermission) {
             awaitingBackgroundPermission = false
-            if (permissions.trackingAllowed()) {
+            if (permissions.foregroundTrackingAllowed()) {
                 app.locationCoordinator.ensureRegistered()
             }
         } else if (permissions.firstRequestPermissions().isEmpty()) {
@@ -120,13 +123,18 @@ class MainActivity : AppCompatActivity() {
             )
             binding.tvMovementState.text = getString(R.string.movement_state, stateLabel)
             binding.btnToggleTracking.setText(R.string.btn_stop_tracking)
-            binding.btnGrantPermissions.visibility = View.GONE
+            binding.btnGrantPermissions.visibility =
+                if (permissions.backgroundGranted()) View.GONE else View.VISIBLE
         } else {
             binding.tvTrackingStatus.text = getString(R.string.tracking_off)
             binding.tvMovementState.visibility = View.GONE
             binding.btnToggleTracking.setText(R.string.btn_enable_tracking)
             binding.btnGrantPermissions.visibility =
-                if (permissions.trackingAllowed()) View.GONE else View.VISIBLE
+                if (permissions.foregroundTrackingAllowed() && permissions.backgroundGranted()) {
+                    View.GONE
+                } else {
+                    View.VISIBLE
+                }
         }
 
         binding.tvLastPublished.text = formatLastPublished(settings)

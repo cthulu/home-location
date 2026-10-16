@@ -52,6 +52,10 @@ class LocationPermissionManager(private val context: Context) {
     fun trackingAllowed(): Boolean =
         systemLocationEnabled() && (coarseGranted() || fineGranted()) && backgroundGranted()
 
+    /** Permissions required to receive updates while the app is open. */
+    fun foregroundTrackingAllowed(): Boolean =
+        systemLocationEnabled() && (coarseGranted() || fineGranted())
+
     /** First request: coarse + fine location, plus activity recognition when available. */
     fun firstRequestPermissions(): Array<String> {
         val permissions = mutableListOf(

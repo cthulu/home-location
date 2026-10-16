@@ -9,11 +9,16 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import com.google.android.gms.tasks.Task
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,12 +61,13 @@ class LocationCoordinator(
             Log.i(TAG, "Start ignored: PubNub is not configured")
             return
         }
-        if (!permissions.trackingAllowed()) {
+        if (!permissions.foregroundTrackingAllowed()) {
             Log.i(TAG, "Start ignored: location permissions missing")
             return
         }
         settings.trackingEnabled = true
         ensureRegistered()
+        requestImmediateLocation()
     }
 
     fun stop() {
@@ -70,6 +76,7 @@ class LocationCoordinator(
         removeActivityRegistration()
         releaseWifiCallback()
         cancelBurstAlarm()
+        cancelPeriodicPublish()
         cancelHeartbeatAlarm()
         releaseNetworkCallback()
         settings.resetState()
@@ -81,7 +88,7 @@ class LocationCoordinator(
      */
     fun ensureRegistered() {
         if (!settings.trackingEnabled) return
-        if (!permissions.trackingAllowed()) {
+        if (!permissions.foregroundTrackingAllowed()) {
             Log.w(TAG, "Registration skipped: location permissions missing")
             return
         }
@@ -92,12 +99,18 @@ class LocationCoordinator(
             removeActivityRegistration()
             releaseWifiCallback()
             cancelBurstAlarm()
+            cancelPeriodicPublish()
             cancelHeartbeatAlarm()
             return
         }
         registerLocationUpdates()
         registerActivityRecognition()
         if (settings.movementState == MovementState.MOVING) scheduleBurstRevert()
+        if (settings.movementState == MovementState.STATIONARY && settings.periodicFallbackEnabled) {
+            schedulePeriodicPublish()
+        } else {
+            cancelPeriodicPublish()
+        }
         registerWifiCallback()
         scheduleHeartbeat()
     }
@@ -125,6 +138,68 @@ class LocationCoordinator(
             handleFix(location.toFix(), now)
         }
         ensureRegistered()
+    }
+
+    /** Requests one fresh fix so starting tracking gives immediate feedback. */
+    private fun requestImmediateLocation() {
+        oneShotLocationRequest(30_000L)
+            .addOnSuccessListener { location ->
+                if (location != null && settings.trackingEnabled) {
+                    handleFix(location.toFix(), clock())
+                } else if (location == null) {
+                    Log.w(TAG, "Immediate location request returned no fix")
+                }
+            }
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Immediate location request failed", error)
+            }
+    }
+
+    private fun oneShotLocationRequest(durationMs: Long): Task<Location> {
+        val priority = if (settings.preciseMode && permissions.fineGranted()) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        val request = CurrentLocationRequest.Builder()
+            .setPriority(priority)
+            .setMaxUpdateAgeMillis(0L)
+            .setDurationMillis(durationMs)
+            .build()
+        val cancellation = CancellationTokenSource()
+        return LocationServices.getFusedLocationProviderClient(context)
+            .getCurrentLocation(request, cancellation.token)
+    }
+
+    /**
+     * Periodic stationary publish. Driven by an alarm rather than by incoming
+     * fixes: a stationary device (or an emulator with a static mock location)
+     * may not produce new fixes on its own, so the cadence would never fire.
+     */
+    fun onPeriodicPublish() {
+        if (!settings.trackingEnabled || roamingPaused) return
+        if (settings.movementState != MovementState.STATIONARY || !settings.periodicFallbackEnabled) {
+            return
+        }
+        oneShotLocationRequest(settings.periodicFallbackIntervalMs)
+            .addOnSuccessListener { location ->
+                if (location == null) {
+                    Log.w(TAG, "Periodic publish: no location available")
+                } else {
+                    val fix = location.toFix()
+                    val result = filter.evaluate(fix, clock(), buildFilterContext())
+                    if (result is LocationDecision.Accept) {
+                        publish(fix)
+                    } else if (result is LocationDecision.Reject) {
+                        Log.d(TAG, "Periodic publish skipped: ${result.reason}")
+                    }
+                }
+                if (settings.trackingEnabled) schedulePeriodicPublish()
+            }
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Periodic location request failed", error)
+                if (settings.trackingEnabled) schedulePeriodicPublish()
+            }
     }
 
     private fun handleFix(fix: LocationFix, now: Long) {
@@ -159,22 +234,23 @@ class LocationCoordinator(
 
         applyStateChange(decision)
 
-        val ctx = FilterContext(
-            maxAccuracyMeters = settings.maxAccuracyMeters,
-            maxLocationAgeMs = settings.maxLocationAgeMs,
-            minPublishIntervalMs = settings.minPublishIntervalMs,
-            minDistanceMeters = settings.minDistanceMeters,
-            periodicFallbackEnabled = settings.periodicFallbackEnabled,
-            periodicFallbackIntervalMs = settings.periodicFallbackIntervalMs,
-            lastPublishedLat = settings.lastPublishedLat,
-            lastPublishedLon = settings.lastPublishedLon,
-            lastPublishedTimeMs = settings.lastPublishedTimeMs
-        )
-        when (val result = filter.evaluate(fix, now, ctx)) {
+        when (val result = filter.evaluate(fix, now, buildFilterContext())) {
             is LocationDecision.Accept -> publish(fix)
             is LocationDecision.Reject -> Log.d(TAG, "Fix not published: ${result.reason}")
         }
     }
+
+    private fun buildFilterContext() = FilterContext(
+        maxAccuracyMeters = settings.maxAccuracyMeters,
+        maxLocationAgeMs = settings.maxLocationAgeMs,
+        minPublishIntervalMs = settings.minPublishIntervalMs,
+        minDistanceMeters = settings.minDistanceMeters,
+        periodicFallbackEnabled = settings.periodicFallbackEnabled,
+        periodicFallbackIntervalMs = settings.periodicFallbackIntervalMs,
+        lastPublishedLat = settings.lastPublishedLat,
+        lastPublishedLon = settings.lastPublishedLon,
+        lastPublishedTimeMs = settings.lastPublishedTimeMs
+    )
 
     private fun publish(fix: LocationFix) {
         if (roamingPaused) return
@@ -185,7 +261,9 @@ class LocationCoordinator(
         // Optimistic update suppresses duplicate publishes for rapid fixes.
         settings.lastPublishedLat = fix.latitude
         settings.lastPublishedLon = fix.longitude
-        settings.lastPublishedTimeMs = fix.timeMs
+        // The UI and interval checks describe when the publish happened, not
+        // the timestamp attached to a potentially batched location fix.
+        settings.lastPublishedTimeMs = clock()
         settings.lastPublishedAccuracyMeters = fix.accuracyMeters
         scope.launch {
             if (roamingPaused) return@launch
@@ -261,6 +339,7 @@ class LocationCoordinator(
                 Log.i(TAG, "State -> MOVING")
                 registerLocationUpdates()
                 scheduleBurstRevert()
+                cancelPeriodicPublish()
             }
 
             is MovementDecision.ToStationary -> {
@@ -269,6 +348,8 @@ class LocationCoordinator(
                 Log.i(TAG, "State -> STATIONARY")
                 registerLocationUpdates()
                 cancelBurstAlarm()
+                if (settings.periodicFallbackEnabled) schedulePeriodicPublish()
+                else cancelPeriodicPublish()
             }
 
             is MovementDecision.NoChange -> Unit
@@ -278,10 +359,10 @@ class LocationCoordinator(
     // --- Registration helpers ---
 
     private fun locationPendingIntent(): PendingIntent =
-        broadcastIntent(REQUEST_CODE_LOCATION, LocationReceiver.ACTION_LOCATION_UPDATE)
+        broadcastIntent(REQUEST_CODE_LOCATION, LocationReceiver.ACTION_LOCATION_UPDATE, mutable = true)
 
     private fun activityPendingIntent(): PendingIntent =
-        broadcastIntent(REQUEST_CODE_ACTIVITY, LocationReceiver.ACTION_ACTIVITY_UPDATE)
+        broadcastIntent(REQUEST_CODE_ACTIVITY, LocationReceiver.ACTION_ACTIVITY_UPDATE, mutable = true)
 
     private fun burstEndPendingIntent(): PendingIntent =
         broadcastIntent(REQUEST_CODE_BURST_END, LocationReceiver.ACTION_BURST_END)
@@ -289,13 +370,24 @@ class LocationCoordinator(
     private fun heartbeatPendingIntent(): PendingIntent =
         broadcastIntent(REQUEST_CODE_HEARTBEAT, LocationReceiver.ACTION_HEARTBEAT)
 
-    private fun broadcastIntent(requestCode: Int, action: String): PendingIntent {
+    private fun periodicPublishPendingIntent(): PendingIntent =
+        broadcastIntent(REQUEST_CODE_PERIODIC_PUBLISH, LocationReceiver.ACTION_PERIODIC_PUBLISH)
+
+    private fun broadcastIntent(requestCode: Int, action: String, mutable: Boolean = false): PendingIntent {
         val intent = Intent(context, LocationReceiver::class.java).setAction(action)
+        // Play services mutates the intent to attach its results, so the
+        // location and activity intents must be mutable on Android 12+
+        // (ApiException 10 otherwise rejects the registration).
+        val mutability = if (mutable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_MUTABLE
+        } else {
+            PendingIntent.FLAG_IMMUTABLE
+        }
         return PendingIntent.getBroadcast(
             context,
             requestCode,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or mutability
         )
     }
 
@@ -308,6 +400,11 @@ class LocationCoordinator(
             settings.backgroundScanIntervalMs
         )
         runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
+            .onSuccess { task ->
+                task.addOnFailureListener {
+                    Log.w(TAG, "Failed to register location updates", it)
+                }
+            }
             .onFailure { Log.w(TAG, "Failed to register location updates", it) }
     }
 
@@ -402,6 +499,7 @@ class LocationCoordinator(
             removeActivityRegistration()
             releaseWifiCallback()
             cancelBurstAlarm()
+            cancelPeriodicPublish()
             cancelHeartbeatAlarm()
         } else if (settings.trackingEnabled) {
             Log.i(TAG, "Roaming ended; resuming location tracking and publishing")
@@ -427,6 +525,21 @@ class LocationCoordinator(
         runCatching { alarm.cancel(burstEndPendingIntent()) }
     }
 
+    private fun schedulePeriodicPublish() {
+        val alarm = alarmManager() ?: return
+        val triggerAt = SystemClock.elapsedRealtime() + settings.periodicFallbackIntervalMs
+        runCatching {
+            alarm.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME, triggerAt, periodicPublishPendingIntent()
+            )
+        }.onFailure { Log.w(TAG, "Failed to schedule periodic publish", it) }
+    }
+
+    private fun cancelPeriodicPublish() {
+        val alarm = alarmManager() ?: return
+        runCatching { alarm.cancel(periodicPublishPendingIntent()) }
+    }
+
     private fun scheduleHeartbeat() {
         val alarm = alarmManager() ?: return
         val triggerAt = SystemClock.elapsedRealtime() + HEARTBEAT_INTERVAL_MS
@@ -449,5 +562,6 @@ class LocationCoordinator(
         private const val REQUEST_CODE_ACTIVITY = 2
         private const val REQUEST_CODE_BURST_END = 3
         private const val REQUEST_CODE_HEARTBEAT = 4
+        private const val REQUEST_CODE_PERIODIC_PUBLISH = 5
     }
 }
