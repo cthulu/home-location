@@ -2,6 +2,7 @@ package nl.freshlytyped.homelocation
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 
 enum class MovementState {
     STATIONARY,
@@ -16,6 +17,7 @@ class LocationSettings(context: Context) {
         private const val KEY_SUBSCRIBE_KEY = "pubnub_subscribe_key"
         private const val KEY_API_KEY = "pubnub_api_key"
         private const val KEY_CHANNEL = "pubnub_channel"
+        private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_TRACKING_ENABLED = "tracking_enabled"
         private const val KEY_PRECISE_MODE = "precise_mode"
         private const val KEY_MAX_ACCURACY = "max_accuracy_meters"
@@ -65,6 +67,10 @@ class LocationSettings(context: Context) {
     var channel: String
         get() = prefs.getString(KEY_CHANNEL, DEFAULT_CHANNEL) ?: DEFAULT_CHANNEL
         set(value) = prefs.edit().putString(KEY_CHANNEL, value.trim()).apply()
+
+    var deviceName: String
+        get() = prefs.getString(KEY_DEVICE_NAME, Build.MODEL) ?: Build.MODEL
+        set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value.trim().ifBlank { Build.MODEL }).apply()
 
     var trackingEnabled: Boolean
         get() = prefs.getBoolean(KEY_TRACKING_ENABLED, false)

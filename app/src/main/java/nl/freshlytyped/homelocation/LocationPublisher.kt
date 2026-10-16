@@ -68,7 +68,7 @@ class LocationPublisher(
             return@withContext Result.failure(PublishException(PublishFailureCategory.CONFIGURATION))
         }
 
-        val payload = LocationPayload.build(fix)
+        val payload = LocationPayload.build(fix, settings.deviceName)
         var lastFailure: Throwable? = null
         for (attempt in 1..MAX_ATTEMPTS) {
             val attemptResult = runCatching {

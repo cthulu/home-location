@@ -45,6 +45,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.etSubscribeKey.setText(settings.subscribeKey)
         binding.etApiKey.setText(settings.apiKey)
         binding.etChannel.setText(settings.channel)
+        binding.etDeviceName.setText(settings.deviceName)
         binding.swPreciseMode.isChecked = settings.preciseMode
         binding.etMaxAccuracy.setText(numberOf(settings.maxAccuracyMeters))
         binding.etMinInterval.setText(numberOf(settings.minPublishIntervalMs / 1000))
@@ -78,6 +79,7 @@ class SettingsActivity : AppCompatActivity() {
         settings.subscribeKey = binding.etSubscribeKey.text.toString()
         settings.apiKey = binding.etApiKey.text.toString()
         settings.channel = binding.etChannel.text.toString().ifBlank { LocationSettings.DEFAULT_CHANNEL }
+        settings.deviceName = binding.etDeviceName.text.toString()
         settings.preciseMode = binding.swPreciseMode.isChecked
         settings.maxAccuracyMeters =
             binding.etMaxAccuracy.text.toString().toFloatOrNull() ?: settings.maxAccuracyMeters

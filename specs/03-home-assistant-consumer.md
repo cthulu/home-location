@@ -9,6 +9,7 @@ The mobile app sends one JSON object as the PubNub message body using the REST p
 ```json
 {
   "type": "location",
+  "device_name": "Pixel 8",
   "latitude": 52.123456,
   "longitude": 5.123457,
   "accuracy": 5.0,
@@ -19,6 +20,7 @@ The mobile app sends one JSON object as the PubNub message body using the REST p
 Field contract:
 
 - `type` is always the string `location`.
+- `device_name` identifies the Android device and is configured in the app settings.
 - `latitude` and `longitude` are JSON numbers rounded to six decimal places.
 - `accuracy` is the reported horizontal accuracy in metres, rounded to one decimal place. It is JSON `null` when the Android fix has no finite accuracy.
 - `timestamp` is the Android location-fix timestamp in Unix epoch milliseconds, not the time the network request completed.
