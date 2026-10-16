@@ -39,6 +39,7 @@ class LocationPermissionManager(private val context: Context) {
 
     /** The system-wide location switch is on. */
     fun systemLocationEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             ?: return false
         return try {

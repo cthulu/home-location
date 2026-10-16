@@ -12,6 +12,10 @@ import android.app.PendingIntent
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.annotation.SuppressLint
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.LocationServices
@@ -19,6 +23,7 @@ import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.TaskCompletionSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -155,7 +160,14 @@ class LocationCoordinator(
             }
     }
 
+    @SuppressLint("MissingPermission")
     private fun oneShotLocationRequest(durationMs: Long): Task<Location> {
+        if (!hasLocationPermission()) {
+            Log.w(TAG, "Location request skipped: no location permission")
+            val tcs = TaskCompletionSource<Location>()
+            tcs.setException(SecurityException("Location permission not granted"))
+            return tcs.task
+        }
         val priority = if (settings.preciseMode && permissions.fineGranted()) {
             Priority.PRIORITY_HIGH_ACCURACY
         } else {
@@ -169,6 +181,13 @@ class LocationCoordinator(
         val cancellation = CancellationTokenSource()
         return LocationServices.getFusedLocationProviderClient(context)
             .getCurrentLocation(request, cancellation.token)
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                        PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -391,7 +410,9 @@ class LocationCoordinator(
         )
     }
 
+    @SuppressLint("MissingPermission")
     private fun registerLocationUpdates() {
+        if (!hasLocationPermission()) return
         val client = LocationServices.getFusedLocationProviderClient(context)
         val request = requestFactory.forState(
             settings.movementState,
@@ -415,20 +436,28 @@ class LocationCoordinator(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun registerActivityRecognition() {
-        if (!permissions.activityRecognitionGranted()) return
+        if (!hasActivityRecognitionPermission()) return
         val client: ActivityRecognitionClient = ActivityRecognition.getClient(context)
         runCatching {
             client.requestActivityUpdates(ACTIVITY_UPDATE_INTERVAL_MS, activityPendingIntent())
         }.onFailure { Log.w(TAG, "Failed to register activity recognition", it) }
     }
 
+    @SuppressLint("MissingPermission")
     private fun removeActivityRegistration() {
-        if (!permissions.activityRecognitionGranted()) return
+        if (!hasActivityRecognitionPermission()) return
         runCatching {
             ActivityRecognition.getClient(context)
                 .removeActivityUpdates(activityPendingIntent())
         }
+    }
+
+    private fun hasActivityRecognitionPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+                PackageManager.PERMISSION_GRANTED
     }
 
     private fun registerWifiCallback() {
