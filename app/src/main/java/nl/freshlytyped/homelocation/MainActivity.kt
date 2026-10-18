@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
             if (startTrackingAfterPermission) {
                 startTrackingAfterPermission = false
                 LocationTrackingService.start(this)
+                updateUi()
             }
         }
 
@@ -73,6 +74,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (startTrackingAfterPermission && permissions.notificationsGranted()) {
+            startTrackingAfterPermission = false
+            LocationTrackingService.start(this)
+        }
         // Re-assert registrations while the app is open (also recovers from
         // app updates and permission changes).
         app.locationCoordinator.ensureRegistered()

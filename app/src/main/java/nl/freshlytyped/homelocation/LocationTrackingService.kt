@@ -29,7 +29,7 @@ class LocationTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
-        START_STICKY
+        START_STICKY.also { (application as App).locationCoordinator.start() }
 
     override fun onDestroy() {
         (application as App).locationCoordinator.stop()
