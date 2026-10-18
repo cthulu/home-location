@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnToggleTracking.setOnClickListener {
             if (app.locationSettings.trackingEnabled) {
+                app.locationCoordinator.stop()
                 stopService(Intent(this, LocationTrackingService::class.java))
             } else if (permissions.foregroundTrackingAllowed()) {
                 if (app.locationSettings.isConfigured()) {
