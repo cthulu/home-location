@@ -21,6 +21,9 @@
     <string name="btn_stop_tracking">Stop tracking</string>
     <string name="btn_settings">Settings</string>
     <string name="tracking_button_hint">Starts or stops background location updates and publishes accepted fixes to PubNub.</string>
+    <string name="location_tracking_channel">Location tracking</string>
+    <string name="location_tracking_channel_description">Required while location tracking is active.</string>
+    <string name="location_tracking_notification">Location tracking is active</string>
     <string name="tracking_requires_configuration">Add your PubNub keys in Settings before starting tracking.</string>
     <string name="perm_system_location">System location switch</string>
     <string name="perm_precise">Precise location</string>

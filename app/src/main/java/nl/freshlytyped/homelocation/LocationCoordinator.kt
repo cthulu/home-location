@@ -66,7 +66,7 @@ class LocationCoordinator(
             Log.i(TAG, "Start ignored: PubNub is not configured")
             return
         }
-        if (!permissions.foregroundTrackingAllowed()) {
+        if (!permissions.trackingAllowed()) {
             Log.i(TAG, "Start ignored: location permissions missing")
             return
         }
@@ -93,7 +93,7 @@ class LocationCoordinator(
      */
     fun ensureRegistered() {
         if (!settings.trackingEnabled) return
-        if (!permissions.foregroundTrackingAllowed()) {
+        if (!permissions.trackingAllowed()) {
             Log.w(TAG, "Registration skipped: location permissions missing")
             return
         }

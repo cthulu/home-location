@@ -18,6 +18,7 @@ class MainActivity : AppCompatActivity() {
     private val permissions by lazy { LocationPermissionManager(this) }
 
     private var awaitingBackgroundPermission = false
+    private var startTrackingAfterPermission = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -35,13 +36,15 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnToggleTracking.setOnClickListener {
             if (app.locationSettings.trackingEnabled) {
-                app.locationCoordinator.stop()
+                stopService(Intent(this, LocationTrackingService::class.java))
             } else if (permissions.foregroundTrackingAllowed()) {
                 if (app.locationSettings.isConfigured()) {
-                    app.locationCoordinator.start()
-                    // Foreground permission starts tracking, but background
-                    // updates additionally require ACCESS_BACKGROUND_LOCATION.
-                    requestBackgroundPermission()
+                    if (permissions.trackingAllowed()) {
+                        LocationTrackingService.start(this)
+                    } else {
+                        startTrackingAfterPermission = true
+                        requestBackgroundPermission()
+                    }
                 } else {
                     Toast.makeText(
                         this,
@@ -99,8 +102,9 @@ class MainActivity : AppCompatActivity() {
     private fun onPermissionsResult(granted: Map<String, Boolean>) {
         if (awaitingBackgroundPermission) {
             awaitingBackgroundPermission = false
-            if (permissions.foregroundTrackingAllowed()) {
-                app.locationCoordinator.ensureRegistered()
+            if (permissions.trackingAllowed() && startTrackingAfterPermission) {
+                startTrackingAfterPermission = false
+                LocationTrackingService.start(this)
             }
         } else if (permissions.firstRequestPermissions().isEmpty()) {
             requestBackgroundPermission()
