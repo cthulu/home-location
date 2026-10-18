@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             if (startTrackingAfterPermission) {
                 startTrackingAfterPermission = false
+                app.locationSettings.trackingEnabled = true
                 LocationTrackingService.start(this)
                 updateUi()
             }
@@ -76,7 +77,9 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (startTrackingAfterPermission && permissions.notificationsGranted()) {
             startTrackingAfterPermission = false
+            app.locationSettings.trackingEnabled = true
             LocationTrackingService.start(this)
+            updateUi()
         }
         // Re-assert registrations while the app is open (also recovers from
         // app updates and permission changes).
@@ -120,7 +123,9 @@ class MainActivity : AppCompatActivity() {
             startTrackingAfterPermission = true
             notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         } else {
+            app.locationSettings.trackingEnabled = true
             LocationTrackingService.start(this)
+            updateUi()
         }
     }
 
