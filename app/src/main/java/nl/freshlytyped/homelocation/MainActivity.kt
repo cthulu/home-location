@@ -20,6 +20,14 @@ class MainActivity : AppCompatActivity() {
     private var awaitingBackgroundPermission = false
     private var startTrackingAfterPermission = false
 
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            if (startTrackingAfterPermission) {
+                startTrackingAfterPermission = false
+                LocationTrackingService.start(this)
+            }
+        }
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             onPermissionsResult(it)
@@ -40,7 +48,7 @@ class MainActivity : AppCompatActivity() {
             } else if (permissions.foregroundTrackingAllowed()) {
                 if (app.locationSettings.isConfigured()) {
                     if (permissions.trackingAllowed()) {
-                        LocationTrackingService.start(this)
+                        startTracking()
                     } else {
                         startTrackingAfterPermission = true
                         requestBackgroundPermission()
@@ -99,12 +107,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun startTracking() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !permissions.notificationsGranted()
+        ) {
+            startTrackingAfterPermission = true
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            LocationTrackingService.start(this)
+        }
+    }
+
     private fun onPermissionsResult(granted: Map<String, Boolean>) {
         if (awaitingBackgroundPermission) {
             awaitingBackgroundPermission = false
             if (permissions.trackingAllowed() && startTrackingAfterPermission) {
                 startTrackingAfterPermission = false
-                LocationTrackingService.start(this)
+                startTracking()
             }
         } else if (permissions.firstRequestPermissions().isEmpty()) {
             requestBackgroundPermission()
