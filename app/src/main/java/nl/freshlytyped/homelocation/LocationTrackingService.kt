@@ -7,32 +7,54 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.Looper
 import android.content.pm.ServiceInfo
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationResult
 
 class LocationTrackingService : Service() {
+
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            (application as App).locationCoordinator.onLocationUpdates(result.locations)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification())
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification())
+            }
+        }.onFailure {
+            Log.e(TAG, "Failed to start foreground service", it)
+            stopSelf()
+            return
         }
-        (application as App).locationCoordinator.start()
+        val coordinator = (application as App).locationCoordinator
+        coordinator.setDirectLocationCallback(locationCallback, Looper.getMainLooper())
+        coordinator.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
-        START_STICKY.also { (application as App).locationCoordinator.start() }
+        START_STICKY.also {
+            (application as App).locationCoordinator.start()
+        }
 
     override fun onDestroy() {
-        (application as App).locationCoordinator.stop()
+        val coordinator = (application as App).locationCoordinator
+        coordinator.clearDirectLocationCallback()
+        coordinator.stop()
         super.onDestroy()
     }
 
@@ -62,6 +84,7 @@ class LocationTrackingService : Service() {
     }
 
     companion object {
+        private const val TAG = "HomeLocation"
         private const val CHANNEL_ID = "location_tracking"
         private const val NOTIFICATION_ID = 1001
 

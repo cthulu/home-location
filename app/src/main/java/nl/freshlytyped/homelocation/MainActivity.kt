@@ -5,11 +5,20 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import nl.freshlytyped.homelocation.databinding.ActivityMainBinding
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -71,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+        binding.btnExportDiagnostics.setOnClickListener { exportDiagnostics() }
     }
 
     override fun onResume() {
@@ -220,6 +230,47 @@ class MainActivity : AppCompatActivity() {
         if (publishedAt <= 0L) return getString(R.string.last_published_never)
         val accuracy = String.format(Locale.getDefault(), "%.0f", settings.lastPublishedAccuracyMeters)
         return getString(R.string.last_published, relativeTime(publishedAt), accuracy)
+    }
+
+    private fun exportDiagnostics() {
+        lifecycleScope.launch {
+            val archive = withContext(Dispatchers.IO) { createDiagnosticsArchive() }
+            val uri = FileProvider.getUriForFile(
+                this@MainActivity,
+                "nl.freshlytyped.homelocation.fileprovider",
+                archive
+            )
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, getString(R.string.btn_export_diagnostics)))
+        }
+    }
+
+    private fun createDiagnosticsArchive(): File {
+        val directory = File(cacheDir, "shared").apply { mkdirs() }
+        val archive = File(directory, "home-location-diagnostics-${System.currentTimeMillis()}.zip")
+        ZipOutputStream(FileOutputStream(archive)).use { zip ->
+            zip.putNextEntry(ZipEntry("app-diagnostics.log"))
+            zip.write(app.diagnostics.snapshot().toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("device-summary.txt"))
+            zip.write(app.diagnostics.deviceSummary().toByteArray())
+            zip.closeEntry()
+            runCatching {
+                val process = Runtime.getRuntime().exec(
+                    arrayOf("logcat", "-d", "-v", "threadtime", "-T", "1 hour ago")
+                )
+                val output = process.inputStream.bufferedReader().useLines { lines ->
+                    lines.filter { it.contains("HomeLocation") }.joinToString("\n")
+                }
+                zip.putNextEntry(ZipEntry("logcat-home-location.txt"))
+                zip.write(output.toByteArray())
+                zip.closeEntry()
+            }
+        }
+        return archive
     }
 
     private fun relativeTime(timestampMs: Long): String {

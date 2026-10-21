@@ -10,6 +10,7 @@ import android.net.NetworkRequest
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.os.Build
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.annotation.SuppressLint
@@ -18,8 +19,10 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
-import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Task
@@ -31,7 +34,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Owns all ongoing location infrastructure: the fused-location
- * registration (delivered via [LocationReceiver]), activity recognition,
+ * registration (delivered via [LocationReceiver] or a direct
+ * [LocationCallback] from the foreground service), activity recognition,
  * the Wi-Fi loss callback, and the burst/heartbeat alarms.
  *
  * Everything is re-established by [ensureRegistered], which is idempotent
@@ -48,11 +52,16 @@ class LocationCoordinator(
     private val clock: () -> Long = { System.currentTimeMillis() }
 ) {
 
+    private val diagnostics = DiagnosticLogger(context)
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var roamingPaused = false
     @Volatile private var appInForeground = false
+    private var directLocationCallback: LocationCallback? = null
+    private var directLocationLooper: Looper? = null
+    @Volatile private var lastLocationCallbackTimeMs = 0L
 
     private val controller: MovementStateController
         get() = MovementStateController(
@@ -62,6 +71,7 @@ class LocationCoordinator(
     // --- Lifecycle ---
 
     fun start() {
+        diagnostics.record("tracking_start_requested")
         if (!settings.isConfigured()) {
             Log.i(TAG, "Start ignored: PubNub is not configured")
             return
@@ -76,6 +86,7 @@ class LocationCoordinator(
     }
 
     fun stop() {
+        diagnostics.record("tracking_stop_requested")
         settings.trackingEnabled = false
         removeLocationRegistration()
         removeActivityRegistration()
@@ -121,6 +132,7 @@ class LocationCoordinator(
     }
 
     fun onHeartbeat() {
+        checkLocationCallbackHealth()
         ensureRegistered()
     }
 
@@ -134,9 +146,31 @@ class LocationCoordinator(
         ensureRegistered()
     }
 
-    // --- Evidence handlers (called from [LocationReceiver]) ---
+    // --- Direct location callback from foreground service ---
+
+    fun setDirectLocationCallback(callback: LocationCallback, looper: Looper) {
+        removeLocationRegistration()
+        directLocationCallback = callback
+        directLocationLooper = looper
+        registerLocationUpdates()
+    }
+
+    fun clearDirectLocationCallback() {
+        removeLocationRegistration()
+        directLocationCallback = null
+        directLocationLooper = null
+    }
+
+    // --- Evidence handlers (called from [LocationReceiver] or direct callback) ---
 
     fun onLocationUpdates(locations: List<Location>) {
+        lastLocationCallbackTimeMs = clock()
+        scope.launch(Dispatchers.IO) {
+            diagnostics.record(
+                "location_callback count=${locations.size} " +
+                    "times=${locations.map { it.time }.joinToString(",")}"
+            )
+        }
         if (!settings.trackingEnabled || roamingPaused) return
         val now = clock()
         for (location in locations) {
@@ -413,6 +447,7 @@ class LocationCoordinator(
     @SuppressLint("MissingPermission")
     private fun registerLocationUpdates() {
         if (!hasLocationPermission()) return
+        removeLocationRegistration()
         val client = LocationServices.getFusedLocationProviderClient(context)
         val request = requestFactory.forState(
             settings.movementState,
@@ -420,19 +455,51 @@ class LocationCoordinator(
             permissions.fineGranted(),
             settings.backgroundScanIntervalMs
         )
-        runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
-            .onSuccess { task ->
+        val callback = directLocationCallback
+        if (callback != null && directLocationLooper != null) {
+            runCatching {
+                client.requestLocationUpdates(request, callback, directLocationLooper!!)
+            }.onSuccess { task ->
+                diagnostics.record("location_registration_requested mode=direct state=${settings.movementState}")
                 task.addOnFailureListener {
-                    Log.w(TAG, "Failed to register location updates", it)
+                    Log.w(TAG, "Failed to register direct location updates", it)
                 }
+            }.onFailure {
+                diagnostics.record("location_registration_exception mode=direct ${it.javaClass.simpleName}")
+                Log.w(TAG, "Failed to register direct location updates", it)
             }
-            .onFailure { Log.w(TAG, "Failed to register location updates", it) }
+        } else {
+            runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
+                .onSuccess { task ->
+                    diagnostics.record("location_registration_requested mode=pending state=${settings.movementState}")
+                    task.addOnFailureListener {
+                        Log.w(TAG, "Failed to register location updates", it)
+                    }
+                }
+                .onFailure { Log.w(TAG, "Failed to register location updates", it) }
+        }
     }
 
     private fun removeLocationRegistration() {
-        runCatching {
-            LocationServices.getFusedLocationProviderClient(context)
-                .removeLocationUpdates(locationPendingIntent())
+        val client = LocationServices.getFusedLocationProviderClient(context)
+        directLocationCallback?.let { callback ->
+            runCatching { client.removeLocationUpdates(callback) }
+        }
+        runCatching { client.removeLocationUpdates(locationPendingIntent()) }
+    }
+
+    private fun checkLocationCallbackHealth() {
+        if (!settings.trackingEnabled || roamingPaused) return
+        if (directLocationCallback == null) return
+        val last = lastLocationCallbackTimeMs
+        if (last == 0L) return
+        val elapsed = clock() - last
+        val threshold = maxOf(settings.backgroundScanIntervalMs * 3, 5 * 60_000L)
+        if (elapsed > threshold) {
+            diagnostics.record("location_callback_watchdog elapsed=${elapsed}ms threshold=${threshold}ms")
+            Log.w(TAG, "No location callback for ${elapsed}ms; falling back to PendingIntent")
+            clearDirectLocationCallback()
+            registerLocationUpdates()
         }
     }
 
@@ -442,7 +509,9 @@ class LocationCoordinator(
         val client: ActivityRecognitionClient = ActivityRecognition.getClient(context)
         runCatching {
             client.requestActivityUpdates(ACTIVITY_UPDATE_INTERVAL_MS, activityPendingIntent())
-        }.onFailure { Log.w(TAG, "Failed to register activity recognition", it) }
+                .addOnSuccessListener { diagnostics.record("activity_registration_succeeded") }
+                .addOnFailureListener { diagnostics.record("activity_registration_failed ${it.javaClass.simpleName}") }
+        }.onFailure { diagnostics.record("activity_registration_exception ${it.javaClass.simpleName}") }
     }
 
     @SuppressLint("MissingPermission")
