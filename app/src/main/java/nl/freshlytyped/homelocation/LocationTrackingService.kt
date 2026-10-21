@@ -25,6 +25,7 @@ class LocationTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        (application as App).diagnostics.record("foreground_service_created")
         createNotificationChannel()
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -52,6 +53,7 @@ class LocationTrackingService : Service() {
         }
 
     override fun onDestroy() {
+        (application as App).diagnostics.record("foreground_service_destroyed")
         val coordinator = (application as App).locationCoordinator
         coordinator.clearDirectLocationCallback()
         coordinator.stop()

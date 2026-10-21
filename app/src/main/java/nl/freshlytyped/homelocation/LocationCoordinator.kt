@@ -82,6 +82,7 @@ class LocationCoordinator(
             Log.i(TAG, "Start ignored: location permissions missing")
             return
         }
+        normalizeMovementState(clock())
         settings.trackingEnabled = true
         ensureRegistered()
         requestImmediateLocation()
@@ -170,7 +171,8 @@ class LocationCoordinator(
         scope.launch(Dispatchers.IO) {
             diagnostics.record(
                 "location_callback count=${locations.size} " +
-                    "times=${locations.map { it.time }.joinToString(",")}"
+                    "times=${locations.map { it.time }.joinToString(",")} " +
+                    "state=${settings.movementState}"
             )
         }
         if (!settings.trackingEnabled || roamingPaused) return
@@ -329,8 +331,9 @@ class LocationCoordinator(
         }
     }
 
-    fun onActivityUpdate(activityType: Int, timeMs: Long) {
+    fun onActivityUpdate(activityType: Int, confidence: Int, timeMs: Long) {
         if (!settings.trackingEnabled || roamingPaused) return
+        diagnostics.record("activity_update type=$activityType confidence=$confidence state=${settings.movementState}")
         val now = if (timeMs > 0) timeMs else clock()
         val decision = controller.observe(
             MovementEvidence.Activity(activityType, timeMs),
@@ -389,8 +392,10 @@ class LocationCoordinator(
         when (decision) {
             is MovementDecision.ToMoving -> {
                 settings.movementState = MovementState.MOVING
+                settings.movingStartedTimeMs = clock()
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> MOVING")
+                diagnostics.record("state_transition stationary_to_moving")
                 registerLocationUpdates()
                 scheduleBurstRevert()
                 cancelPeriodicPublish()
@@ -398,8 +403,10 @@ class LocationCoordinator(
 
             is MovementDecision.ToStationary -> {
                 settings.movementState = MovementState.STATIONARY
+                settings.movingStartedTimeMs = 0L
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> STATIONARY")
+                diagnostics.record("state_transition moving_to_stationary")
                 registerLocationUpdates()
                 cancelBurstAlarm()
                 if (settings.periodicFallbackEnabled) schedulePeriodicPublish()
@@ -411,6 +418,17 @@ class LocationCoordinator(
     }
 
     // --- Registration helpers ---
+
+    private fun normalizeMovementState(now: Long) {
+        if (settings.movementState != MovementState.MOVING) return
+        val started = settings.movingStartedTimeMs
+        if (started <= 0L || now - started >= MAX_HIGH_ACCURACY_DURATION_MS) {
+            settings.movementState = MovementState.STATIONARY
+            settings.movingStartedTimeMs = 0L
+            settings.accumulatedDistanceMeters = 0f
+            diagnostics.record("stale_moving_state_reset")
+        }
+    }
 
     private fun locationPendingIntent(): PendingIntent =
         broadcastIntent(REQUEST_CODE_LOCATION, LocationReceiver.ACTION_LOCATION_UPDATE, mutable = true)
@@ -685,6 +703,7 @@ class LocationCoordinator(
         private const val TAG = "HomeLocation"
         private const val ACTIVITY_UPDATE_INTERVAL_MS = 30_000L
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
+        private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2

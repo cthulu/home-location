@@ -39,6 +39,7 @@ class LocationSettings(context: Context) {
         private const val KEY_LAST_PUBLISHED_TIME = "last_published_time"
         private const val KEY_LAST_PUBLISHED_ACCURACY = "last_published_accuracy_meters"
         private const val KEY_LAST_EVIDENCE_TIME = "last_movement_evidence_time"
+        private const val KEY_MOVING_STARTED_TIME = "moving_started_time"
         private const val KEY_ACCUMULATED_DISTANCE = "accumulated_distance_meters"
 
         const val DEFAULT_CHANNEL = "home-location"
@@ -175,6 +176,10 @@ class LocationSettings(context: Context) {
         get() = prefs.getLong(KEY_LAST_EVIDENCE_TIME, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_EVIDENCE_TIME, value).apply()
 
+    var movingStartedTimeMs: Long
+        get() = prefs.getLong(KEY_MOVING_STARTED_TIME, 0L)
+        set(value) = prefs.edit().putLong(KEY_MOVING_STARTED_TIME, value).apply()
+
     /** Travel distance accumulated since the last reset (used for movement detection). */
     var accumulatedDistanceMeters: Float
         get() = prefs.getFloat(KEY_ACCUMULATED_DISTANCE, 0f)
@@ -196,6 +201,7 @@ class LocationSettings(context: Context) {
             .putLong(KEY_LAST_PUBLISHED_LON, 0L)
             .putFloat(KEY_LAST_PUBLISHED_ACCURACY, 0f)
             .putLong(KEY_LAST_EVIDENCE_TIME, 0L)
+            .putLong(KEY_MOVING_STARTED_TIME, 0L)
             .putFloat(KEY_ACCUMULATED_DISTANCE, 0f)
             .apply()
     }
