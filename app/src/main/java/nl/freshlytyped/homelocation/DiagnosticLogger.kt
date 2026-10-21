@@ -22,7 +22,7 @@ class DiagnosticLogger(context: Context) {
         } else {
             emptyList()
         }
-        file.writeText((retained + "$now|${format.format(Date(now))}|$event\n").joinToString(""))
+        file.writeText((retained + "$now|${format.format(Date(now))}|$event").joinToString("\n", postfix = "\n"))
     }
 
     @Synchronized

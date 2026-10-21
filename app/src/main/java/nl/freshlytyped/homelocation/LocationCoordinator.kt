@@ -61,6 +61,8 @@ class LocationCoordinator(
     @Volatile private var appInForeground = false
     private var directLocationCallback: LocationCallback? = null
     private var directLocationLooper: Looper? = null
+    private var registeredLocationKey: LocationRegistrationKey? = null
+    private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
 
     private val controller: MovementStateController
@@ -176,7 +178,6 @@ class LocationCoordinator(
         for (location in locations) {
             handleFix(location.toFix(), now)
         }
-        ensureRegistered()
     }
 
     /** Requests one fresh fix so starting tracking gives immediate feedback. */
@@ -447,8 +448,16 @@ class LocationCoordinator(
     @SuppressLint("MissingPermission")
     private fun registerLocationUpdates() {
         if (!hasLocationPermission()) return
-        removeLocationRegistration()
         val client = LocationServices.getFusedLocationProviderClient(context)
+        val registrationKey = LocationRegistrationKey(
+            state = settings.movementState,
+            precise = settings.preciseMode,
+            fineGranted = permissions.fineGranted(),
+            stationaryIntervalMs = settings.backgroundScanIntervalMs,
+            direct = directLocationCallback != null
+        )
+        if (registeredLocationKey == registrationKey) return
+        removeLocationRegistration()
         val request = requestFactory.forState(
             settings.movementState,
             settings.preciseMode,
@@ -460,27 +469,36 @@ class LocationCoordinator(
             runCatching {
                 client.requestLocationUpdates(request, callback, directLocationLooper!!)
             }.onSuccess { task ->
+                registeredLocationKey = registrationKey
                 diagnostics.record("location_registration_requested mode=direct state=${settings.movementState}")
                 task.addOnFailureListener {
+                    registeredLocationKey = null
                     Log.w(TAG, "Failed to register direct location updates", it)
                 }
             }.onFailure {
+                registeredLocationKey = null
                 diagnostics.record("location_registration_exception mode=direct ${it.javaClass.simpleName}")
                 Log.w(TAG, "Failed to register direct location updates", it)
             }
         } else {
             runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
                 .onSuccess { task ->
+                    registeredLocationKey = registrationKey
                     diagnostics.record("location_registration_requested mode=pending state=${settings.movementState}")
                     task.addOnFailureListener {
+                        registeredLocationKey = null
                         Log.w(TAG, "Failed to register location updates", it)
                     }
                 }
-                .onFailure { Log.w(TAG, "Failed to register location updates", it) }
+                .onFailure {
+                    registeredLocationKey = null
+                    Log.w(TAG, "Failed to register location updates", it)
+                }
         }
     }
 
     private fun removeLocationRegistration() {
+        registeredLocationKey = null
         val client = LocationServices.getFusedLocationProviderClient(context)
         directLocationCallback?.let { callback ->
             runCatching { client.removeLocationUpdates(callback) }
@@ -506,17 +524,29 @@ class LocationCoordinator(
     @SuppressLint("MissingPermission")
     private fun registerActivityRecognition() {
         if (!hasActivityRecognitionPermission()) return
+        if (activityRegistrationActive) return
         val client: ActivityRecognitionClient = ActivityRecognition.getClient(context)
+        activityRegistrationActive = true
         runCatching {
             client.requestActivityUpdates(ACTIVITY_UPDATE_INTERVAL_MS, activityPendingIntent())
-                .addOnSuccessListener { diagnostics.record("activity_registration_succeeded") }
-                .addOnFailureListener { diagnostics.record("activity_registration_failed ${it.javaClass.simpleName}") }
-        }.onFailure { diagnostics.record("activity_registration_exception ${it.javaClass.simpleName}") }
+                .addOnSuccessListener {
+                    activityRegistrationActive = true
+                    diagnostics.record("activity_registration_succeeded")
+                }
+                .addOnFailureListener {
+                    activityRegistrationActive = false
+                    diagnostics.record("activity_registration_failed ${it.javaClass.simpleName}")
+                }
+        }.onFailure {
+            activityRegistrationActive = false
+            diagnostics.record("activity_registration_exception ${it.javaClass.simpleName}")
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun removeActivityRegistration() {
         if (!hasActivityRecognitionPermission()) return
+        activityRegistrationActive = false
         runCatching {
             ActivityRecognition.getClient(context)
                 .removeActivityUpdates(activityPendingIntent())
@@ -662,4 +692,12 @@ class LocationCoordinator(
         private const val REQUEST_CODE_HEARTBEAT = 4
         private const val REQUEST_CODE_PERIODIC_PUBLISH = 5
     }
+
+    private data class LocationRegistrationKey(
+        val state: MovementState,
+        val precise: Boolean,
+        val fineGranted: Boolean,
+        val stationaryIntervalMs: Long,
+        val direct: Boolean
+    )
 }
