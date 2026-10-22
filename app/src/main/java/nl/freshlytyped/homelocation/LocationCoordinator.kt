@@ -261,6 +261,32 @@ class LocationCoordinator(
     private fun handleFix(fix: LocationFix, now: Long) {
         if (fix.timeMs <= settings.lastKnownTimeMs) return
 
+        val previousDistance = if (settings.hasLastKnown()) {
+            GeoMath.distanceMeters(
+                settings.lastKnownLat,
+                settings.lastKnownLon,
+                fix.latitude,
+                fix.longitude
+            )
+        } else {
+            null
+        }
+        val publishedDistance = if (settings.hasLastPublished()) {
+            GeoMath.distanceMeters(
+                settings.lastPublishedLat,
+                settings.lastPublishedLon,
+                fix.latitude,
+                fix.longitude
+            )
+        } else {
+            null
+        }
+        diagnosticsRecord(
+            "location_fix ageMs=${now - fix.timeMs} accuracy=${fix.accuracyMeters} " +
+                "distanceFromLast=${previousDistance ?: -1.0} " +
+                "distanceFromPublished=${publishedDistance ?: -1.0} state=${settings.movementState}"
+        )
+
         val decision = controller.observe(
             MovementEvidence.Fix(fix),
             settings.movementState,
@@ -291,9 +317,19 @@ class LocationCoordinator(
         applyStateChange(decision)
 
         when (val result = filter.evaluate(fix, now, buildFilterContext())) {
-            is LocationDecision.Accept -> publish(fix)
-            is LocationDecision.Reject -> Log.d(TAG, "Fix not published: ${result.reason}")
+            is LocationDecision.Accept -> {
+                diagnosticsRecord("location_decision accept")
+                publish(fix)
+            }
+            is LocationDecision.Reject -> {
+                diagnosticsRecord("location_decision reject reason=${result.reason}")
+                Log.d(TAG, "Fix not published: ${result.reason}")
+            }
         }
+    }
+
+    private fun diagnosticsRecord(event: String) {
+        scope.launch(Dispatchers.IO) { diagnostics.record(event) }
     }
 
     private fun buildFilterContext() = FilterContext(
@@ -324,8 +360,12 @@ class LocationCoordinator(
         scope.launch {
             if (roamingPaused) return@launch
             publisher.publish(fix)
-                .onSuccess { Log.i(TAG, "Location published (state=${settings.movementState})") }
+                .onSuccess {
+                    diagnosticsRecord("publish success state=${settings.movementState}")
+                    Log.i(TAG, "Location published (state=${settings.movementState})")
+                }
                 .onFailure {
+                    diagnosticsRecord("publish failure category=${PublishFailureMapper.categoryFor(it)}")
                     Log.w(TAG, "Publish failed: ${PublishFailureMapper.categoryFor(it)}")
                 }
         }
