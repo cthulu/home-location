@@ -127,9 +127,9 @@ class LocationSettings(context: Context) {
         get() = prefs.getBoolean(KEY_BACKGROUND_LOCATION_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_BACKGROUND_LOCATION_ENABLED, value).apply()
 
-    /** Stationary/background scan interval. */
+    /** Stationary/background scan interval (2 min default, matching Home Assistant Companion's background cadence). */
     var backgroundScanIntervalMs: Long
-        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 60_000L)
+        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 2 * 60_000L)
         set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
 
     fun isConfigured(): Boolean =

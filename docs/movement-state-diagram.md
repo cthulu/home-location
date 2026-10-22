@@ -12,8 +12,9 @@ stateDiagram-v2
     [*] --> STATIONARY
 
     STATIONARY --> MOVING: moving activity confidence >= 70%
-    STATIONARY --> MOVING: accumulated fix distance >= threshold
+    STATIONARY --> MOVING: reliable fix distance >= threshold
     STATIONARY --> STATIONARY: Wi-Fi lost / balanced verification
+    STATIONARY --> STATIONARY: fix rejected (accuracy worse than 50 m)
 
     MOVING --> MOVING: moving activity / refresh evidence time
     MOVING --> MOVING: moving fix / refresh evidence time
@@ -45,10 +46,15 @@ stateDiagram-v2
 The coordinator switches to `MOVING` when it receives one of these signals:
 
 - Activity recognition reports walking, running, cycling, on foot, or in a
-  vehicle.
-- The Wi-Fi network is lost.
-- Consecutive location fixes accumulate at least the configured movement
-  distance.
+  vehicle with at least 70% confidence.
+- Consecutive location fixes with accuracy of 50 m or better accumulate at
+  least the configured movement distance.
+
+Fixes with worse accuracy are discarded before they reach the state machine
+and can never switch the device into high-accuracy mode. Wi-Fi loss triggers
+only a balanced one-shot verification fix; it no longer switches state
+directly. The stationary scan defaults to a 2-minute interval with batched
+delivery, similar to Home Assistant Companion's background cadence.
 
 The high-accuracy request is then registered and the burst-expiry alarm is
 scheduled.

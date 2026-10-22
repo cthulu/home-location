@@ -264,6 +264,13 @@ class LocationCoordinator(
 
     private fun handleFix(fix: LocationFix, now: Long) {
         if (fix.timeMs <= settings.lastKnownTimeMs) return
+        if (!controller.isReliableFix(fix)) {
+            diagnosticsRecord(
+                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
+                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
+            )
+            return
+        }
 
         val previousDistance = if (settings.hasLastKnown()) {
             GeoMath.distanceMeters(
