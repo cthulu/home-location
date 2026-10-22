@@ -21,6 +21,7 @@ Home Location is an Android app that:
 - Keep the commit message clean without mentioning the files
 - Focus on what the actual commit added/removed
 - Depending on the type of work, prefix commit with: 'feat' (for feature), 'fix' (for fixes), 'other' for other type of work
+- Any change to movement detection or tracking state-transition logic must update `docs/movement-state-diagram.md` in the same change.
 
 # Error handling and logging
 - Handle and test error handling in case of connection errors

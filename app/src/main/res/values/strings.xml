@@ -20,7 +20,11 @@
     <string name="btn_enable_tracking">Start location tracking</string>
     <string name="btn_stop_tracking">Stop tracking</string>
     <string name="btn_settings">Settings</string>
+    <string name="btn_export_diagnostics">Export diagnostics (last hour)</string>
     <string name="tracking_button_hint">Starts or stops background location updates and publishes accepted fixes to PubNub.</string>
+    <string name="location_tracking_channel">Location tracking</string>
+    <string name="location_tracking_channel_description">Required while location tracking is active.</string>
+    <string name="location_tracking_notification">Location tracking is active</string>
     <string name="tracking_requires_configuration">Add your PubNub keys in Settings before starting tracking.</string>
     <string name="perm_system_location">System location switch</string>
     <string name="perm_precise">Precise location</string>
@@ -49,7 +53,7 @@
     <string name="settings_background_location_label">Allow background location collection</string>
     <string name="settings_background_location_hint">When disabled, location is collected only while the app is open.</string>
     <string name="settings_background_interval_label">Background scan interval (seconds)</string>
-    <string name="settings_background_interval_hint">60</string>
+    <string name="settings_background_interval_hint">120</string>
     <string name="settings_section_tracking">Tracking behavior</string>
     <string name="settings_precise_mode_label">High accuracy while moving</string>
     <string name="settings_precise_mode_hint">Uses GPS while moving (more battery), balanced accuracy while stationary.</string>

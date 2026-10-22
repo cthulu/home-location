@@ -10,6 +10,7 @@ import android.net.NetworkRequest
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.os.Build
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.annotation.SuppressLint
@@ -18,8 +19,10 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
-import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Task
@@ -31,7 +34,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Owns all ongoing location infrastructure: the fused-location
- * registration (delivered via [LocationReceiver]), activity recognition,
+ * registration (delivered via [LocationReceiver] or a direct
+ * [LocationCallback] from the foreground service), activity recognition,
  * the Wi-Fi loss callback, and the burst/heartbeat alarms.
  *
  * Everything is re-established by [ensureRegistered], which is idempotent
@@ -48,11 +52,18 @@ class LocationCoordinator(
     private val clock: () -> Long = { System.currentTimeMillis() }
 ) {
 
+    private val diagnostics = DiagnosticLogger(context)
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var roamingPaused = false
     @Volatile private var appInForeground = false
+    private var directLocationCallback: LocationCallback? = null
+    private var directLocationLooper: Looper? = null
+    private var registeredLocationKey: LocationRegistrationKey? = null
+    private var activityRegistrationActive = false
+    @Volatile private var lastLocationCallbackTimeMs = 0L
 
     private val controller: MovementStateController
         get() = MovementStateController(
@@ -62,20 +73,23 @@ class LocationCoordinator(
     // --- Lifecycle ---
 
     fun start() {
+        diagnostics.record("tracking_start_requested")
         if (!settings.isConfigured()) {
             Log.i(TAG, "Start ignored: PubNub is not configured")
             return
         }
-        if (!permissions.foregroundTrackingAllowed()) {
+        if (!permissions.trackingAllowed()) {
             Log.i(TAG, "Start ignored: location permissions missing")
             return
         }
+        normalizeMovementState(clock())
         settings.trackingEnabled = true
         ensureRegistered()
         requestImmediateLocation()
     }
 
     fun stop() {
+        diagnostics.record("tracking_stop_requested")
         settings.trackingEnabled = false
         removeLocationRegistration()
         removeActivityRegistration()
@@ -93,7 +107,7 @@ class LocationCoordinator(
      */
     fun ensureRegistered() {
         if (!settings.trackingEnabled) return
-        if (!permissions.foregroundTrackingAllowed()) {
+        if (!permissions.trackingAllowed()) {
             Log.w(TAG, "Registration skipped: location permissions missing")
             return
         }
@@ -121,6 +135,7 @@ class LocationCoordinator(
     }
 
     fun onHeartbeat() {
+        checkLocationCallbackHealth()
         ensureRegistered()
     }
 
@@ -134,15 +149,38 @@ class LocationCoordinator(
         ensureRegistered()
     }
 
-    // --- Evidence handlers (called from [LocationReceiver]) ---
+    // --- Direct location callback from foreground service ---
+
+    fun setDirectLocationCallback(callback: LocationCallback, looper: Looper) {
+        removeLocationRegistration()
+        directLocationCallback = callback
+        directLocationLooper = looper
+        registerLocationUpdates()
+    }
+
+    fun clearDirectLocationCallback() {
+        removeLocationRegistration()
+        directLocationCallback = null
+        directLocationLooper = null
+    }
+
+    // --- Evidence handlers (called from [LocationReceiver] or direct callback) ---
 
     fun onLocationUpdates(locations: List<Location>) {
+        lastLocationCallbackTimeMs = clock()
+        scope.launch(Dispatchers.IO) {
+            diagnostics.record(
+                "location_callback count=${locations.size} " +
+                    "times=${locations.map { it.time }.joinToString(",")} " +
+                    "state=${settings.movementState}"
+            )
+        }
         if (!settings.trackingEnabled || roamingPaused) return
+        if (enforceHighAccuracyLimit(clock())) return
         val now = clock()
         for (location in locations) {
             handleFix(location.toFix(), now)
         }
-        ensureRegistered()
     }
 
     /** Requests one fresh fix so starting tracking gives immediate feedback. */
@@ -161,14 +199,17 @@ class LocationCoordinator(
     }
 
     @SuppressLint("MissingPermission")
-    private fun oneShotLocationRequest(durationMs: Long): Task<Location> {
+    private fun oneShotLocationRequest(
+        durationMs: Long,
+        forceBalanced: Boolean = false
+    ): Task<Location> {
         if (!hasLocationPermission()) {
             Log.w(TAG, "Location request skipped: no location permission")
             val tcs = TaskCompletionSource<Location>()
             tcs.setException(SecurityException("Location permission not granted"))
             return tcs.task
         }
-        val priority = if (settings.preciseMode && permissions.fineGranted()) {
+        val priority = if (!forceBalanced && settings.preciseMode && permissions.fineGranted()) {
             Priority.PRIORITY_HIGH_ACCURACY
         } else {
             Priority.PRIORITY_BALANCED_POWER_ACCURACY
@@ -223,6 +264,39 @@ class LocationCoordinator(
 
     private fun handleFix(fix: LocationFix, now: Long) {
         if (fix.timeMs <= settings.lastKnownTimeMs) return
+        if (!controller.isReliableFix(fix)) {
+            diagnosticsRecord(
+                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
+                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
+            )
+            return
+        }
+
+        val previousDistance = if (settings.hasLastKnown()) {
+            GeoMath.distanceMeters(
+                settings.lastKnownLat,
+                settings.lastKnownLon,
+                fix.latitude,
+                fix.longitude
+            )
+        } else {
+            null
+        }
+        val publishedDistance = if (settings.hasLastPublished()) {
+            GeoMath.distanceMeters(
+                settings.lastPublishedLat,
+                settings.lastPublishedLon,
+                fix.latitude,
+                fix.longitude
+            )
+        } else {
+            null
+        }
+        diagnosticsRecord(
+            "location_fix ageMs=${now - fix.timeMs} accuracy=${fix.accuracyMeters} " +
+                "distanceFromLast=${previousDistance ?: -1.0} " +
+                "distanceFromPublished=${publishedDistance ?: -1.0} state=${settings.movementState}"
+        )
 
         val decision = controller.observe(
             MovementEvidence.Fix(fix),
@@ -254,9 +328,19 @@ class LocationCoordinator(
         applyStateChange(decision)
 
         when (val result = filter.evaluate(fix, now, buildFilterContext())) {
-            is LocationDecision.Accept -> publish(fix)
-            is LocationDecision.Reject -> Log.d(TAG, "Fix not published: ${result.reason}")
+            is LocationDecision.Accept -> {
+                diagnosticsRecord("location_decision accept")
+                publish(fix)
+            }
+            is LocationDecision.Reject -> {
+                diagnosticsRecord("location_decision reject reason=${result.reason}")
+                Log.d(TAG, "Fix not published: ${result.reason}")
+            }
         }
+    }
+
+    private fun diagnosticsRecord(event: String) {
+        scope.launch(Dispatchers.IO) { diagnostics.record(event) }
     }
 
     private fun buildFilterContext() = FilterContext(
@@ -287,16 +371,30 @@ class LocationCoordinator(
         scope.launch {
             if (roamingPaused) return@launch
             publisher.publish(fix)
-                .onSuccess { Log.i(TAG, "Location published (state=${settings.movementState})") }
+                .onSuccess {
+                    diagnosticsRecord("publish success state=${settings.movementState}")
+                    Log.i(TAG, "Location published (state=${settings.movementState})")
+                }
                 .onFailure {
+                    diagnosticsRecord("publish failure category=${PublishFailureMapper.categoryFor(it)}")
                     Log.w(TAG, "Publish failed: ${PublishFailureMapper.categoryFor(it)}")
                 }
         }
     }
 
-    fun onActivityUpdate(activityType: Int, timeMs: Long) {
+    fun onActivityUpdate(activityType: Int, confidence: Int, timeMs: Long) {
         if (!settings.trackingEnabled || roamingPaused) return
         val now = if (timeMs > 0) timeMs else clock()
+        diagnostics.record("activity_update type=$activityType confidence=$confidence state=${settings.movementState}")
+        if (enforceHighAccuracyLimit(now)) return
+        if (controller.isMovingActivity(activityType) && confidence < MIN_MOVING_ACTIVITY_CONFIDENCE) {
+            diagnosticsRecord("activity_update ignored reason=low_confidence threshold=$MIN_MOVING_ACTIVITY_CONFIDENCE")
+            return
+        }
+        if (now < settings.activityCooldownUntilMs && controller.isMovingActivity(activityType)) {
+            diagnosticsRecord("activity_update ignored reason=high_accuracy_cooldown")
+            return
+        }
         val decision = controller.observe(
             MovementEvidence.Activity(activityType, timeMs),
             settings.movementState,
@@ -318,21 +416,15 @@ class LocationCoordinator(
 
     fun onWifiLost() {
         if (!settings.trackingEnabled || roamingPaused) return
-        val now = clock()
-        val decision = controller.observe(
-            MovementEvidence.WifiLost,
-            settings.movementState,
-            settings.lastKnownLat,
-            settings.lastKnownLon,
-            settings.hasLastKnown(),
-            settings.accumulatedDistanceMeters,
-            settings.lastMovementEvidenceTimeMs,
-            now
-        )
-        if (decision.isEvidence) {
-            settings.lastMovementEvidenceTimeMs = now
-        }
-        applyStateChange(decision)
+        diagnosticsRecord("wifi_lost verification_requested")
+        oneShotLocationRequest(30_000L, forceBalanced = true)
+            .addOnSuccessListener { location ->
+                if (location == null || !settings.trackingEnabled || roamingPaused) return@addOnSuccessListener
+                handleFix(location.toFix(), clock())
+            }
+            .addOnFailureListener {
+                diagnosticsRecord("wifi_lost verification_failed ${it.javaClass.simpleName}")
+            }
     }
 
     fun onBurstEnd() {
@@ -354,8 +446,11 @@ class LocationCoordinator(
         when (decision) {
             is MovementDecision.ToMoving -> {
                 settings.movementState = MovementState.MOVING
+                settings.movingStartedTimeMs = clock()
+                settings.activityCooldownUntilMs = 0L
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> MOVING")
+                diagnostics.record("state_transition stationary_to_moving")
                 registerLocationUpdates()
                 scheduleBurstRevert()
                 cancelPeriodicPublish()
@@ -363,8 +458,10 @@ class LocationCoordinator(
 
             is MovementDecision.ToStationary -> {
                 settings.movementState = MovementState.STATIONARY
+                settings.movingStartedTimeMs = 0L
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> STATIONARY")
+                diagnostics.record("state_transition moving_to_stationary")
                 registerLocationUpdates()
                 cancelBurstAlarm()
                 if (settings.periodicFallbackEnabled) schedulePeriodicPublish()
@@ -376,6 +473,31 @@ class LocationCoordinator(
     }
 
     // --- Registration helpers ---
+
+    private fun normalizeMovementState(now: Long) {
+        if (settings.movementState != MovementState.MOVING) return
+        val started = settings.movingStartedTimeMs
+        if (started <= 0L || now - started >= MAX_HIGH_ACCURACY_DURATION_MS) {
+            settings.movementState = MovementState.STATIONARY
+            settings.movingStartedTimeMs = 0L
+            settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
+            settings.accumulatedDistanceMeters = 0f
+            diagnostics.record("stale_moving_state_reset")
+        }
+    }
+
+    private fun enforceHighAccuracyLimit(now: Long): Boolean {
+        if (settings.movementState != MovementState.MOVING) return false
+        val started = settings.movingStartedTimeMs
+        if (started > 0L && now - started < MAX_HIGH_ACCURACY_DURATION_MS) return false
+        settings.movementState = MovementState.STATIONARY
+        settings.movingStartedTimeMs = 0L
+        settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
+        settings.accumulatedDistanceMeters = 0f
+        diagnosticsRecord("state_transition moving_to_stationary reason=high_accuracy_limit")
+        applyStateChange(MovementDecision.ToStationary(MovementState.MOVING))
+        return true
+    }
 
     private fun locationPendingIntent(): PendingIntent =
         broadcastIntent(REQUEST_CODE_LOCATION, LocationReceiver.ACTION_LOCATION_UPDATE, mutable = true)
@@ -414,40 +536,104 @@ class LocationCoordinator(
     private fun registerLocationUpdates() {
         if (!hasLocationPermission()) return
         val client = LocationServices.getFusedLocationProviderClient(context)
+        val registrationKey = LocationRegistrationKey(
+            state = settings.movementState,
+            precise = settings.preciseMode,
+            fineGranted = permissions.fineGranted(),
+            stationaryIntervalMs = settings.backgroundScanIntervalMs,
+            direct = directLocationCallback != null
+        )
+        if (registeredLocationKey == registrationKey) return
+        removeLocationRegistration()
         val request = requestFactory.forState(
             settings.movementState,
             settings.preciseMode,
             permissions.fineGranted(),
             settings.backgroundScanIntervalMs
         )
-        runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
-            .onSuccess { task ->
+        val callback = directLocationCallback
+        if (callback != null && directLocationLooper != null) {
+            runCatching {
+                client.requestLocationUpdates(request, callback, directLocationLooper!!)
+            }.onSuccess { task ->
+                registeredLocationKey = registrationKey
+                diagnostics.record("location_registration_requested mode=direct state=${settings.movementState}")
                 task.addOnFailureListener {
+                    registeredLocationKey = null
+                    Log.w(TAG, "Failed to register direct location updates", it)
+                }
+            }.onFailure {
+                registeredLocationKey = null
+                diagnostics.record("location_registration_exception mode=direct ${it.javaClass.simpleName}")
+                Log.w(TAG, "Failed to register direct location updates", it)
+            }
+        } else {
+            runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
+                .onSuccess { task ->
+                    registeredLocationKey = registrationKey
+                    diagnostics.record("location_registration_requested mode=pending state=${settings.movementState}")
+                    task.addOnFailureListener {
+                        registeredLocationKey = null
+                        Log.w(TAG, "Failed to register location updates", it)
+                    }
+                }
+                .onFailure {
+                    registeredLocationKey = null
                     Log.w(TAG, "Failed to register location updates", it)
                 }
-            }
-            .onFailure { Log.w(TAG, "Failed to register location updates", it) }
+        }
     }
 
     private fun removeLocationRegistration() {
-        runCatching {
-            LocationServices.getFusedLocationProviderClient(context)
-                .removeLocationUpdates(locationPendingIntent())
+        registeredLocationKey = null
+        val client = LocationServices.getFusedLocationProviderClient(context)
+        directLocationCallback?.let { callback ->
+            runCatching { client.removeLocationUpdates(callback) }
+        }
+        runCatching { client.removeLocationUpdates(locationPendingIntent()) }
+    }
+
+    private fun checkLocationCallbackHealth() {
+        if (!settings.trackingEnabled || roamingPaused) return
+        if (directLocationCallback == null) return
+        val last = lastLocationCallbackTimeMs
+        if (last == 0L) return
+        val elapsed = clock() - last
+        val threshold = maxOf(settings.backgroundScanIntervalMs * 3, 5 * 60_000L)
+        if (elapsed > threshold) {
+            diagnostics.record("location_callback_watchdog elapsed=${elapsed}ms threshold=${threshold}ms")
+            Log.w(TAG, "No location callback for ${elapsed}ms; falling back to PendingIntent")
+            clearDirectLocationCallback()
+            registerLocationUpdates()
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun registerActivityRecognition() {
         if (!hasActivityRecognitionPermission()) return
+        if (activityRegistrationActive) return
         val client: ActivityRecognitionClient = ActivityRecognition.getClient(context)
+        activityRegistrationActive = true
         runCatching {
             client.requestActivityUpdates(ACTIVITY_UPDATE_INTERVAL_MS, activityPendingIntent())
-        }.onFailure { Log.w(TAG, "Failed to register activity recognition", it) }
+                .addOnSuccessListener {
+                    activityRegistrationActive = true
+                    diagnostics.record("activity_registration_succeeded")
+                }
+                .addOnFailureListener {
+                    activityRegistrationActive = false
+                    diagnostics.record("activity_registration_failed ${it.javaClass.simpleName}")
+                }
+        }.onFailure {
+            activityRegistrationActive = false
+            diagnostics.record("activity_registration_exception ${it.javaClass.simpleName}")
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun removeActivityRegistration() {
         if (!hasActivityRecognitionPermission()) return
+        activityRegistrationActive = false
         runCatching {
             ActivityRecognition.getClient(context)
                 .removeActivityUpdates(activityPendingIntent())
@@ -585,7 +771,10 @@ class LocationCoordinator(
     companion object {
         private const val TAG = "HomeLocation"
         private const val ACTIVITY_UPDATE_INTERVAL_MS = 30_000L
+        private const val MIN_MOVING_ACTIVITY_CONFIDENCE = 70
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
+        private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
+        private const val ACTIVITY_COOLDOWN_MS = 15 * 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2
@@ -593,4 +782,12 @@ class LocationCoordinator(
         private const val REQUEST_CODE_HEARTBEAT = 4
         private const val REQUEST_CODE_PERIODIC_PUBLISH = 5
     }
+
+    private data class LocationRegistrationKey(
+        val state: MovementState,
+        val precise: Boolean,
+        val fineGranted: Boolean,
+        val stationaryIntervalMs: Long,
+        val direct: Boolean
+    )
 }

@@ -161,7 +161,18 @@ class MovementStateController(private val config: MovementConfig) {
     fun isStationaryActivity(activityType: Int): Boolean =
         activityType == ACTIVITY_TYPE_STILL
 
+    /**
+     * Fixes with worse accuracy cannot be trusted as movement evidence.
+     * On the Razr a 129 m-accuracy fix switched into high-accuracy mode and
+     * was then rejected by the publishing filter.
+     */
+    fun isReliableFix(fix: LocationFix): Boolean =
+        fix.accuracyMeters.isFinite() && fix.accuracyMeters <= MOVEMENT_MAX_ACCURACY_METERS
+
     companion object {
+        /** Accuracy required before a fix can trigger high-accuracy mode. */
+        const val MOVEMENT_MAX_ACCURACY_METERS = 50f
+
         // Activity types from com.google.android.gms.location.DetectedActivity.
         const val ACTIVITY_TYPE_IN_VEHICLE = 1
         const val ACTIVITY_TYPE_ON_FOOT = 2

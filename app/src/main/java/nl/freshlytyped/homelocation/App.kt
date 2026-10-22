@@ -8,6 +8,7 @@ import android.app.Application
  * Wi-Fi callback).
  */
 class App : Application() {
+    val diagnostics by lazy { DiagnosticLogger(this) }
 
     /**
      * Lazy: [Application] is constructed before [attachBaseContext], so the
