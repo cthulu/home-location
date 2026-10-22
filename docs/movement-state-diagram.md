@@ -11,9 +11,9 @@ location callbacks while the coordinator applies these transitions.
 stateDiagram-v2
     [*] --> STATIONARY
 
-    STATIONARY --> MOVING: moving activity
-    STATIONARY --> MOVING: Wi-Fi lost
+    STATIONARY --> MOVING: moving activity confidence >= 70%
     STATIONARY --> MOVING: accumulated fix distance >= threshold
+    STATIONARY --> STATIONARY: Wi-Fi lost / balanced verification
 
     MOVING --> MOVING: moving activity / refresh evidence time
     MOVING --> MOVING: moving fix / refresh evidence time
@@ -21,6 +21,8 @@ stateDiagram-v2
 
     MOVING --> STATIONARY: burst alarm and no evidence
     MOVING --> STATIONARY: service start and moving state > 15 min
+    MOVING --> STATIONARY: runtime high-accuracy limit
+    STATIONARY --> MOVING: location distance threshold during activity cooldown
 
     STATIONARY --> STATIONARY: still activity
     STATIONARY --> STATIONARY: fix below movement threshold
@@ -57,6 +59,11 @@ The coordinator returns to `STATIONARY` when the burst-expiry alarm fires and
 no recent movement evidence exists. A moving state that has survived a
 service restart for more than 15 minutes is also reset to stationary to avoid
 leaving high-accuracy tracking active indefinitely.
+
+During a running session, the same limit applies even when activity recognition
+continually reports movement. Activity-only movement evidence is ignored during
+the cooldown after that reset; a location fix crossing the configured distance
+threshold can resume moving mode.
 
 ### Registration rule
 

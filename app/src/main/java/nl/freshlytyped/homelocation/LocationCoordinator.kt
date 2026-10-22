@@ -176,6 +176,7 @@ class LocationCoordinator(
             )
         }
         if (!settings.trackingEnabled || roamingPaused) return
+        if (enforceHighAccuracyLimit(clock())) return
         val now = clock()
         for (location in locations) {
             handleFix(location.toFix(), now)
@@ -198,14 +199,17 @@ class LocationCoordinator(
     }
 
     @SuppressLint("MissingPermission")
-    private fun oneShotLocationRequest(durationMs: Long): Task<Location> {
+    private fun oneShotLocationRequest(
+        durationMs: Long,
+        forceBalanced: Boolean = false
+    ): Task<Location> {
         if (!hasLocationPermission()) {
             Log.w(TAG, "Location request skipped: no location permission")
             val tcs = TaskCompletionSource<Location>()
             tcs.setException(SecurityException("Location permission not granted"))
             return tcs.task
         }
-        val priority = if (settings.preciseMode && permissions.fineGranted()) {
+        val priority = if (!forceBalanced && settings.preciseMode && permissions.fineGranted()) {
             Priority.PRIORITY_HIGH_ACCURACY
         } else {
             Priority.PRIORITY_BALANCED_POWER_ACCURACY
@@ -373,8 +377,17 @@ class LocationCoordinator(
 
     fun onActivityUpdate(activityType: Int, confidence: Int, timeMs: Long) {
         if (!settings.trackingEnabled || roamingPaused) return
-        diagnostics.record("activity_update type=$activityType confidence=$confidence state=${settings.movementState}")
         val now = if (timeMs > 0) timeMs else clock()
+        diagnostics.record("activity_update type=$activityType confidence=$confidence state=${settings.movementState}")
+        if (enforceHighAccuracyLimit(now)) return
+        if (controller.isMovingActivity(activityType) && confidence < MIN_MOVING_ACTIVITY_CONFIDENCE) {
+            diagnosticsRecord("activity_update ignored reason=low_confidence threshold=$MIN_MOVING_ACTIVITY_CONFIDENCE")
+            return
+        }
+        if (now < settings.activityCooldownUntilMs && controller.isMovingActivity(activityType)) {
+            diagnosticsRecord("activity_update ignored reason=high_accuracy_cooldown")
+            return
+        }
         val decision = controller.observe(
             MovementEvidence.Activity(activityType, timeMs),
             settings.movementState,
@@ -396,21 +409,15 @@ class LocationCoordinator(
 
     fun onWifiLost() {
         if (!settings.trackingEnabled || roamingPaused) return
-        val now = clock()
-        val decision = controller.observe(
-            MovementEvidence.WifiLost,
-            settings.movementState,
-            settings.lastKnownLat,
-            settings.lastKnownLon,
-            settings.hasLastKnown(),
-            settings.accumulatedDistanceMeters,
-            settings.lastMovementEvidenceTimeMs,
-            now
-        )
-        if (decision.isEvidence) {
-            settings.lastMovementEvidenceTimeMs = now
-        }
-        applyStateChange(decision)
+        diagnosticsRecord("wifi_lost verification_requested")
+        oneShotLocationRequest(30_000L, forceBalanced = true)
+            .addOnSuccessListener { location ->
+                if (location == null || !settings.trackingEnabled || roamingPaused) return@addOnSuccessListener
+                handleFix(location.toFix(), clock())
+            }
+            .addOnFailureListener {
+                diagnosticsRecord("wifi_lost verification_failed ${it.javaClass.simpleName}")
+            }
     }
 
     fun onBurstEnd() {
@@ -433,6 +440,7 @@ class LocationCoordinator(
             is MovementDecision.ToMoving -> {
                 settings.movementState = MovementState.MOVING
                 settings.movingStartedTimeMs = clock()
+                settings.activityCooldownUntilMs = 0L
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> MOVING")
                 diagnostics.record("state_transition stationary_to_moving")
@@ -465,9 +473,23 @@ class LocationCoordinator(
         if (started <= 0L || now - started >= MAX_HIGH_ACCURACY_DURATION_MS) {
             settings.movementState = MovementState.STATIONARY
             settings.movingStartedTimeMs = 0L
+            settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
             settings.accumulatedDistanceMeters = 0f
             diagnostics.record("stale_moving_state_reset")
         }
+    }
+
+    private fun enforceHighAccuracyLimit(now: Long): Boolean {
+        if (settings.movementState != MovementState.MOVING) return false
+        val started = settings.movingStartedTimeMs
+        if (started > 0L && now - started < MAX_HIGH_ACCURACY_DURATION_MS) return false
+        settings.movementState = MovementState.STATIONARY
+        settings.movingStartedTimeMs = 0L
+        settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
+        settings.accumulatedDistanceMeters = 0f
+        diagnosticsRecord("state_transition moving_to_stationary reason=high_accuracy_limit")
+        applyStateChange(MovementDecision.ToStationary(MovementState.MOVING))
+        return true
     }
 
     private fun locationPendingIntent(): PendingIntent =
@@ -742,8 +764,10 @@ class LocationCoordinator(
     companion object {
         private const val TAG = "HomeLocation"
         private const val ACTIVITY_UPDATE_INTERVAL_MS = 30_000L
+        private const val MIN_MOVING_ACTIVITY_CONFIDENCE = 70
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
         private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
+        private const val ACTIVITY_COOLDOWN_MS = 15 * 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2
