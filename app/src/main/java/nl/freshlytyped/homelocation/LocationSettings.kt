@@ -39,7 +39,15 @@ class LocationSettings(context: Context) {
         private const val KEY_LAST_PUBLISHED_TIME = "last_published_time"
         private const val KEY_LAST_PUBLISHED_ACCURACY = "last_published_accuracy_meters"
         private const val KEY_LAST_EVIDENCE_TIME = "last_movement_evidence_time"
+        private const val KEY_MOVING_STARTED_TIME = "moving_started_time"
+        private const val KEY_ACTIVITY_COOLDOWN_UNTIL = "activity_cooldown_until"
         private const val KEY_ACCUMULATED_DISTANCE = "accumulated_distance_meters"
+        private const val KEY_GEOFENCING_ENABLED = "geofencing_enabled"
+        private const val KEY_GEOFENCE_DEBOUNCE_MS = "geofence_debounce_ms"
+        private const val KEY_LOW_FREQUENCY_INTERVAL_MS = "low_frequency_interval_ms"
+        private const val KEY_PERSISTED_ZONES = "persisted_zones"
+        private const val KEY_CURRENT_ZONE_ID = "current_zone_id"
+        private const val KEY_LAST_ZONE_TRANSITION_MS = "last_zone_transition_ms"
 
         const val DEFAULT_CHANNEL = "home-location"
 
@@ -125,9 +133,9 @@ class LocationSettings(context: Context) {
         get() = prefs.getBoolean(KEY_BACKGROUND_LOCATION_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_BACKGROUND_LOCATION_ENABLED, value).apply()
 
-    /** Stationary/background scan interval. */
+    /** Stationary/background scan interval (2 min default, matching Home Assistant Companion's background cadence). */
     var backgroundScanIntervalMs: Long
-        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 60_000L)
+        get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 2 * 60_000L)
         set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
 
     fun isConfigured(): Boolean =
@@ -175,10 +183,52 @@ class LocationSettings(context: Context) {
         get() = prefs.getLong(KEY_LAST_EVIDENCE_TIME, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_EVIDENCE_TIME, value).apply()
 
+    var movingStartedTimeMs: Long
+        get() = prefs.getLong(KEY_MOVING_STARTED_TIME, 0L)
+        set(value) = prefs.edit().putLong(KEY_MOVING_STARTED_TIME, value).apply()
+
+    var activityCooldownUntilMs: Long
+        get() = prefs.getLong(KEY_ACTIVITY_COOLDOWN_UNTIL, 0L)
+        set(value) = prefs.edit().putLong(KEY_ACTIVITY_COOLDOWN_UNTIL, value).apply()
+
     /** Travel distance accumulated since the last reset (used for movement detection). */
     var accumulatedDistanceMeters: Float
         get() = prefs.getFloat(KEY_ACCUMULATED_DISTANCE, 0f)
         set(value) = prefs.edit().putFloat(KEY_ACCUMULATED_DISTANCE, value).apply()
+
+    /** Enable geofencing-based zone detection. */
+    var geofencingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_GEOFENCING_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_GEOFENCING_ENABLED, value).apply()
+
+    /** Minimum time between zone transitions to suppress flapping. */
+    var geofenceDebounceMs: Long
+        get() = prefs.getLong(KEY_GEOFENCE_DEBOUNCE_MS, 180_000L)
+        set(value) = prefs.edit().putLong(KEY_GEOFENCE_DEBOUNCE_MS, value).apply()
+
+    /** Location request interval inside a zone (default 5 min). */
+    var lowFrequencyIntervalMs: Long
+        get() = prefs.getLong(KEY_LOW_FREQUENCY_INTERVAL_MS, 300_000L)
+        set(value) = prefs.edit().putLong(KEY_LOW_FREQUENCY_INTERVAL_MS, value).apply()
+
+    /** Zone list received from PubNub, persisted as JSON. */
+    var persistedZones: String?
+        get() = prefs.getString(KEY_PERSISTED_ZONES, null)
+        set(value) = prefs.edit().putString(KEY_PERSISTED_ZONES, value).apply()
+
+    /** Zone the device is currently inside, or null. */
+    var currentZoneId: String?
+        get() = prefs.getString(KEY_CURRENT_ZONE_ID, null)
+        set(value) = prefs.edit().putString(KEY_CURRENT_ZONE_ID, value).apply()
+
+    /** Timestamp of last zone transition. */
+    var lastZoneTransitionMs: Long
+        get() = prefs.getLong(KEY_LAST_ZONE_TRANSITION_MS, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_ZONE_TRANSITION_MS, value).apply()
+
+    /** Whether the device is currently inside a known zone. */
+    val isInsideZone: Boolean
+        get() = currentZoneId != null
 
     fun hasLastKnown(): Boolean = lastKnownTimeMs > 0
 
@@ -196,7 +246,11 @@ class LocationSettings(context: Context) {
             .putLong(KEY_LAST_PUBLISHED_LON, 0L)
             .putFloat(KEY_LAST_PUBLISHED_ACCURACY, 0f)
             .putLong(KEY_LAST_EVIDENCE_TIME, 0L)
+            .putLong(KEY_MOVING_STARTED_TIME, 0L)
+            .putLong(KEY_ACTIVITY_COOLDOWN_UNTIL, 0L)
             .putFloat(KEY_ACCUMULATED_DISTANCE, 0f)
+            .putString(KEY_CURRENT_ZONE_ID, null)
+            .putLong(KEY_LAST_ZONE_TRANSITION_MS, 0L)
             .apply()
     }
 }

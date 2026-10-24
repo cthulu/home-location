@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Movement detection (activity recognition, Android 10+) -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
@@ -40,11 +43,26 @@
             </intent-filter>
         </activity>
 
-        <activity
+            <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:label="@string/settings_toolbar_title"
             android:parentActivityName=".MainActivity" />
+
+        <service
+            android:name=".LocationTrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!--
             Delivery point for fused location updates, activity recognition
@@ -60,6 +78,15 @@
                 <action android:name="nl.freshlytyped.homelocation.ACTION_BURST_END" />
                 <action android:name="nl.freshlytyped.homelocation.ACTION_HEARTBEAT" />
                 <action android:name="nl.freshlytyped.homelocation.ACTION_PERIODIC_PUBLISH" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Geofence transition receiver for zone-based tracking -->
+        <receiver
+            android:name=".GeofenceReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="nl.freshlytyped.homelocation.ACTION_GEOFENCE_TRANSITION" />
             </intent-filter>
         </receiver>
 

@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import nl.freshlytyped.homelocation.databinding.ActivitySettingsBinding
-import java.util.Locale
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -30,13 +29,19 @@ class SettingsActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
 
         loadIntoForm()
-        binding.swPreciseMode.setOnCheckedChangeListener { _, enabled ->
-            setPreciseInputsEnabled(enabled)
-        }
         binding.btnSave.setOnClickListener {
             saveFromForm()
             binding.tvSaved.visibility = View.VISIBLE
             binding.tvSaved.postDelayed({ binding.tvSaved.visibility = View.GONE }, 2000)
+            updateCachedZonesDisplay()
+        }
+        binding.btnRefreshZones.setOnClickListener {
+            (application as App).locationCoordinator.refreshZones()
+            binding.tvZonesRefreshed.visibility = View.VISIBLE
+            binding.tvZonesRefreshed.postDelayed({
+                binding.tvZonesRefreshed.visibility = View.GONE
+                updateCachedZonesDisplay()
+            }, 2000)
         }
     }
 
@@ -47,30 +52,21 @@ class SettingsActivity : AppCompatActivity() {
         binding.etChannel.setText(settings.channel)
         binding.etDeviceName.setText(settings.deviceName)
         binding.swPreciseMode.isChecked = settings.preciseMode
-        binding.etMaxAccuracy.setText(numberOf(settings.maxAccuracyMeters))
-        binding.etMinInterval.setText(numberOf(settings.minPublishIntervalMs / 1000))
-        binding.etMinDistance.setText(numberOf(settings.minDistanceMeters))
-        binding.etMovementDetection.setText(numberOf(settings.movementDetectionDistanceMeters))
-        binding.etMaxAge.setText(numberOf(settings.maxLocationAgeMs / 60_000))
-        binding.swPeriodicFallback.isChecked = settings.periodicFallbackEnabled
-        binding.etPeriodicInterval.setText(numberOf(settings.periodicFallbackIntervalMs / 60_000))
-        binding.etBurst.setText(numberOf(settings.burstDurationMs / 60_000))
-        binding.swBackgroundLocation.isChecked = settings.backgroundLocationEnabled
-        binding.etBackgroundInterval.setText(numberOf(settings.backgroundScanIntervalMs / 1000))
-        setPreciseInputsEnabled(settings.preciseMode)
+        binding.swGeofencing.isChecked = settings.geofencingEnabled
+        updateCachedZonesDisplay()
     }
 
-    private fun setPreciseInputsEnabled(enabled: Boolean) {
-        listOf(
-            binding.etMaxAccuracy,
-            binding.etMinInterval,
-            binding.etMinDistance,
-            binding.etMovementDetection,
-            binding.etMaxAge,
-            binding.etBurst
-        ).forEach {
-            it.isEnabled = enabled
-            it.alpha = if (enabled) 1f else 0.5f
+    private fun updateCachedZonesDisplay() {
+        val coordinator = (application as App).locationCoordinator
+        val zoneNames = coordinator.getCachedZoneNames()
+        if (zoneNames.isNotEmpty()) {
+            binding.tvCachedZones.text = getString(
+                R.string.settings_cached_zones_label,
+                zoneNames.joinToString()
+            )
+            binding.tvCachedZones.visibility = View.VISIBLE
+        } else {
+            binding.tvCachedZones.visibility = View.GONE
         }
     }
 
@@ -81,45 +77,6 @@ class SettingsActivity : AppCompatActivity() {
         settings.channel = binding.etChannel.text.toString().ifBlank { LocationSettings.DEFAULT_CHANNEL }
         settings.deviceName = binding.etDeviceName.text.toString()
         settings.preciseMode = binding.swPreciseMode.isChecked
-        settings.maxAccuracyMeters =
-            binding.etMaxAccuracy.text.toString().toFloatOrNull() ?: settings.maxAccuracyMeters
-        settings.minPublishIntervalMs = parseSeconds(
-            binding.etMinInterval.text.toString(), settings.minPublishIntervalMs
-        )
-        settings.minDistanceMeters =
-            binding.etMinDistance.text.toString().toFloatOrNull() ?: settings.minDistanceMeters
-        settings.movementDetectionDistanceMeters = binding.etMovementDetection.text.toString()
-            .toFloatOrNull() ?: settings.movementDetectionDistanceMeters
-        settings.maxLocationAgeMs = parseMinutes(
-            binding.etMaxAge.text.toString(), settings.maxLocationAgeMs
-        )
-        settings.periodicFallbackEnabled = binding.swPeriodicFallback.isChecked
-        settings.periodicFallbackIntervalMs = parseMinutes(
-            binding.etPeriodicInterval.text.toString(), settings.periodicFallbackIntervalMs
-        )
-        settings.burstDurationMs =
-            parseMinutes(binding.etBurst.text.toString(), settings.burstDurationMs)
-        settings.backgroundLocationEnabled = binding.swBackgroundLocation.isChecked
-        settings.backgroundScanIntervalMs = parseBackgroundSeconds(
-            binding.etBackgroundInterval.text.toString(), settings.backgroundScanIntervalMs
-        )
-    }
-
-    private fun numberOf(value: Number): String =
-        String.format(Locale.getDefault(), "%.0f", value.toDouble())
-
-    private fun parseSeconds(text: String, currentMs: Long): Long {
-        val seconds = text.toLongOrNull() ?: return currentMs
-        return (seconds * 1000).coerceIn(10_000L, 24 * 3600_000L)
-    }
-
-    private fun parseMinutes(text: String, currentMs: Long): Long {
-        val minutes = text.toLongOrNull() ?: return currentMs
-        return (minutes * 60_000).coerceIn(30_000L, 24 * 3600_000L)
-    }
-
-    private fun parseBackgroundSeconds(text: String, currentMs: Long): Long {
-        val seconds = text.toLongOrNull() ?: return currentMs
-        return (seconds * 1000).coerceIn(30_000L, 600_000L)
+        settings.geofencingEnabled = binding.swGeofencing.isChecked
     }
 }

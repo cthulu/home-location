@@ -61,8 +61,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
 
-    // Fused Location Provider and activity recognition
+    // Fused Location Provider and activity recognition and geofencing
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Gson for JSON parsing in zones subscriber
+    implementation("com.google.code.gson:gson:2.10.1")
 
     // Unit testing
     testImplementation("junit:junit:4.13.2")

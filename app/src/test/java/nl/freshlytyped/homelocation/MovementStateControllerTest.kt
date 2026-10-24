@@ -154,15 +154,8 @@ class MovementStateControllerTest {
 
     // --- Wi-Fi evidence ---
 
-    @Test
-    fun `wifi loss switches a stationary state to moving`() {
-        val decision = controller.observe(
-            MovementEvidence.WifiLost,
-            MovementState.STATIONARY,
-            52.0, 5.0, true, 0f, 0L, now
-        )
-        assertTrue(decision is MovementDecision.ToMoving)
-    }
+    // Wi-Fi loss no longer switches state directly: the coordinator now
+    // requests a balanced one-shot verification fix instead.
 
     @Test
     fun `wifi loss while moving refreshes the burst`() {
@@ -216,6 +209,16 @@ class MovementStateControllerTest {
     }
 
     // --- Activity type classification ---
+
+    @Test
+    fun `fix with accuracy above the movement threshold is not reliable`() {
+        assertFalse(controller.isReliableFix(LocationFix(52.0, 5.0, 129f, now)))
+    }
+
+    @Test
+    fun `fix with acceptable accuracy is reliable`() {
+        assertTrue(controller.isReliableFix(LocationFix(52.0, 5.0, 20f, now)))
+    }
 
     @Test
     fun `moving activity classification`() {

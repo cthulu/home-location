@@ -143,6 +143,15 @@
                 android:backgroundTint="@color/surface_variant"
                 android:textColor="@color/on_surface" />
 
+            <Button
+                android:id="@+id/btnExportDiagnostics"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/btn_export_diagnostics"
+                android:backgroundTint="@color/surface_variant"
+                android:textColor="@color/on_surface" />
+
         </LinearLayout>
     </ScrollView>
 </LinearLayout>
