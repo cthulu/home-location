@@ -44,6 +44,7 @@ class ZonesSubscriber(
         if (streamJob != null && streamJob!!.isActive) return
         if (settings.subscribeKey.isBlank()) {
             Log.w(TAG, "ZonesSubscriber skipped: no subscribe key configured")
+            diagnostics.record("zones_subscriber_skipped reason=no_subscribe_key")
             return
         }
         // Restore cached zones immediately so geofencing works offline
@@ -54,6 +55,7 @@ class ZonesSubscriber(
         }
         streamJob = scope.launch { startStream() }
         diagnostics.record("zones_subscriber_started channel=${settings.channel}")
+        Log.i(TAG, "ZonesSubscriber started, channel=${settings.channel}")
     }
 
     fun stop() {

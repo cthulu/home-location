@@ -164,6 +164,8 @@ class LocationCoordinator(
     }
 
     fun refreshZones() {
+        if (!settings.geofencingEnabled) return
+        zonesSubscriber.start()
         zonesSubscriber.requestZones()
     }
 
