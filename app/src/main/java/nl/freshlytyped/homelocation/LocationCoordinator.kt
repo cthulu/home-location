@@ -629,9 +629,7 @@ class LocationCoordinator(
                 client.requestLocationUpdates(request, callback, directLocationLooper!!)
             }.onSuccess { task ->
                 registeredLocationKey = registrationKey
-                diagnostics.record(
-                    "location_registration_requested mode=direct state=${settings.movementState}"
-                )
+                diagnostics.record("location_registration_requested mode=direct state=${settings.movementState}")
                 task.addOnFailureListener {
                     registeredLocationKey = null
                     Log.w(TAG, "Failed to register direct location updates", it)
@@ -645,9 +643,7 @@ class LocationCoordinator(
             runCatching { client.requestLocationUpdates(request, locationPendingIntent()) }
                 .onSuccess { task ->
                     registeredLocationKey = registrationKey
-                    diagnostics.record(
-                        "location_registration_requested mode=pending state=${settings.movementState}"
-                    )
+                    diagnostics.record("location_registration_requested mode=pending state=${settings.movementState}")
                     task.addOnFailureListener {
                         registeredLocationKey = null
                         Log.w(TAG, "Failed to register location updates", it)
