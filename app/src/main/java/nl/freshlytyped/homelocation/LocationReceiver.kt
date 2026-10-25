@@ -31,19 +31,18 @@ class LocationReceiver : BroadcastReceiver() {
             }
 
             ACTION_ACTIVITY_UPDATE -> {
-                val activityType = extractActivityType(intent)
-                coordinator.onActivityUpdate(activityType, System.currentTimeMillis())
+                val result = ActivityRecognitionResult.extractResult(intent)
+                coordinator.onActivityUpdate(
+                    result?.mostProbableActivity?.type ?: DetectedActivity.UNKNOWN,
+                    result?.mostProbableActivity?.confidence ?: 0,
+                    result?.time ?: System.currentTimeMillis()
+                )
             }
 
             ACTION_BURST_END -> coordinator.onBurstEnd()
             ACTION_HEARTBEAT -> coordinator.onHeartbeat()
             ACTION_PERIODIC_PUBLISH -> coordinator.onPeriodicPublish()
         }
-    }
-
-    private fun extractActivityType(intent: Intent): Int {
-        val result = ActivityRecognitionResult.extractResult(intent) ?: return DetectedActivity.UNKNOWN
-        return result.mostProbableActivity.type
     }
 
     companion object {

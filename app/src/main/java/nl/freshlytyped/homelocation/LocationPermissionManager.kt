@@ -37,6 +37,12 @@ class LocationPermissionManager(private val context: Context) {
                 PackageManager.PERMISSION_GRANTED
     }
 
+    fun notificationsGranted(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
     /** The system-wide location switch is on. */
     fun systemLocationEnabled(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true

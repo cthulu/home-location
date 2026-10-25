@@ -6,8 +6,8 @@ import com.google.android.gms.location.Priority
 /**
  * Builds the [LocationRequest] for a movement state.
  *
- * Stationary: balanced power accuracy with generous batching (1-3 min) —
- * cheap, and still detects movement via distance accumulation.
+ * Stationary: balanced power accuracy with modest batching — cheap,
+ * but still detects movement via distance accumulation.
  *
  * Moving: high accuracy (when requested and permitted) at a tighter
  * cadence, matching the desired 1-5 minute freshness while moving.
@@ -30,7 +30,7 @@ class LocationRequestFactory {
             val interval = stationaryIntervalMs.coerceIn(MIN_STATIONARY_INTERVAL_MS, MAX_STATIONARY_INTERVAL_MS)
             LocationRequest.Builder(interval)
                 .setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-                .setMaxUpdateDelayMillis(interval * 3)
+                .setMaxUpdateDelayMillis(interval)
                 .build()
         }
     }

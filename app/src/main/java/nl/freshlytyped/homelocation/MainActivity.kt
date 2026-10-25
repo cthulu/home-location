@@ -5,11 +5,20 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import nl.freshlytyped.homelocation.databinding.ActivityMainBinding
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -18,6 +27,17 @@ class MainActivity : AppCompatActivity() {
     private val permissions by lazy { LocationPermissionManager(this) }
 
     private var awaitingBackgroundPermission = false
+    private var startTrackingAfterPermission = false
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            if (startTrackingAfterPermission) {
+                startTrackingAfterPermission = false
+                app.locationSettings.trackingEnabled = true
+                LocationTrackingService.start(this)
+                updateUi()
+            }
+        }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -36,12 +56,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnToggleTracking.setOnClickListener {
             if (app.locationSettings.trackingEnabled) {
                 app.locationCoordinator.stop()
+                stopService(Intent(this, LocationTrackingService::class.java))
             } else if (permissions.foregroundTrackingAllowed()) {
                 if (app.locationSettings.isConfigured()) {
-                    app.locationCoordinator.start()
-                    // Foreground permission starts tracking, but background
-                    // updates additionally require ACCESS_BACKGROUND_LOCATION.
-                    requestBackgroundPermission()
+                    if (permissions.trackingAllowed()) {
+                        startTracking()
+                    } else {
+                        startTrackingAfterPermission = true
+                        requestBackgroundPermission()
+                    }
                 } else {
                     Toast.makeText(
                         this,
@@ -57,10 +80,17 @@ class MainActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+        binding.btnExportDiagnostics.setOnClickListener { exportDiagnostics() }
     }
 
     override fun onResume() {
         super.onResume()
+        if (startTrackingAfterPermission && permissions.notificationsGranted()) {
+            startTrackingAfterPermission = false
+            app.locationSettings.trackingEnabled = true
+            LocationTrackingService.start(this)
+            updateUi()
+        }
         // Re-assert registrations while the app is open (also recovers from
         // app updates and permission changes).
         app.locationCoordinator.ensureRegistered()
@@ -96,11 +126,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun startTracking() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !permissions.notificationsGranted()
+        ) {
+            startTrackingAfterPermission = true
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            app.locationSettings.trackingEnabled = true
+            LocationTrackingService.start(this)
+            updateUi()
+        }
+    }
+
     private fun onPermissionsResult(granted: Map<String, Boolean>) {
         if (awaitingBackgroundPermission) {
             awaitingBackgroundPermission = false
-            if (permissions.foregroundTrackingAllowed()) {
-                app.locationCoordinator.ensureRegistered()
+            if (permissions.trackingAllowed() && startTrackingAfterPermission) {
+                startTrackingAfterPermission = false
+                startTracking()
             }
         } else if (permissions.firstRequestPermissions().isEmpty()) {
             requestBackgroundPermission()
@@ -186,6 +230,47 @@ class MainActivity : AppCompatActivity() {
         if (publishedAt <= 0L) return getString(R.string.last_published_never)
         val accuracy = String.format(Locale.getDefault(), "%.0f", settings.lastPublishedAccuracyMeters)
         return getString(R.string.last_published, relativeTime(publishedAt), accuracy)
+    }
+
+    private fun exportDiagnostics() {
+        lifecycleScope.launch {
+            val archive = withContext(Dispatchers.IO) { createDiagnosticsArchive() }
+            val uri = FileProvider.getUriForFile(
+                this@MainActivity,
+                "nl.freshlytyped.homelocation.fileprovider",
+                archive
+            )
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, getString(R.string.btn_export_diagnostics)))
+        }
+    }
+
+    private fun createDiagnosticsArchive(): File {
+        val directory = File(cacheDir, "shared").apply { mkdirs() }
+        val archive = File(directory, "home-location-diagnostics-${System.currentTimeMillis()}.zip")
+        ZipOutputStream(FileOutputStream(archive)).use { zip ->
+            zip.putNextEntry(ZipEntry("app-diagnostics.log"))
+            zip.write(app.diagnostics.snapshot().toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("device-summary.txt"))
+            zip.write(app.diagnostics.deviceSummary().toByteArray())
+            zip.closeEntry()
+            runCatching {
+                val process = Runtime.getRuntime().exec(
+                    arrayOf("logcat", "-d", "-v", "threadtime", "-T", "1 hour ago")
+                )
+                val output = process.inputStream.bufferedReader().useLines { lines ->
+                    lines.filter { it.contains("HomeLocation") }.joinToString("\n")
+                }
+                zip.putNextEntry(ZipEntry("logcat-home-location.txt"))
+                zip.write(output.toByteArray())
+                zip.closeEntry()
+            }
+        }
+        return archive
     }
 
     private fun relativeTime(timestampMs: Long): String {
