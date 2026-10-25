@@ -5,6 +5,7 @@ import android.content.Intent
 import android.app.PendingIntent
 import android.os.Build
 import android.util.Log
+import android.annotation.SuppressLint
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingRequest
@@ -103,6 +104,7 @@ class ZoneManager(
         return zones
     }
 
+    @SuppressLint("MissingPermission")
     private fun registerGeofencesInternal(zones: List<Zone>) {
         val geofences = zones.map { zone ->
             Geofence.Builder().apply {
