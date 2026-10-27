@@ -23,39 +23,45 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
     - name: Build with Gradle
-      run: ./gradlew build
+      run: ./gradlew assembleDebug testDebugUnitTest
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v7.0.1
       with:
         path: ./app/build/outputs/apk
-    - uses: actions/upload-artifact@v4
-      with:
-        name: unsigned-apk
-        path: app/build/outputs/apk/release/app-release-unsigned.apk
   
   sign:
     needs: build
     runs-on: ubuntu-latest
     environment: sign-release
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: unsigned-apk
-          path: unsigned
+       - uses: actions/checkout@v4
+       - name: set up JDK 21
+         uses: actions/setup-java@v5
+         with:
+           java-version: '21'
+           distribution: 'temurin'
+           cache: gradle
+       - name: Grant execute permission for gradlew
+         run: chmod +x gradlew
+       - name: Prepare signing keystore
+         env:
+           ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+         run: echo "$ANDROID_SIGNING_KEY" | base64 --decode > release.keystore
+       - name: Build signed AAB
+         env:
+           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+         run: ./gradlew assembleRelease bundleRelease
 
-      - name: Sign APK
-        id: sign_apk
-        uses: ilharp/sign-android-release@v2
-        with:
-          releaseDir: unsigned
-          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
-          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
-
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk
-          path: ${{ steps.sign_apk.outputs.signedFile }}
+       - name: Upload signed APK
+         uses: actions/upload-artifact@v4
+         with:
+           name: release-apk
+           path: app/build/outputs/apk/release/app-release.apk
+       - name: Upload signed AAB
+         uses: actions/upload-artifact@v4
+         with:
+           name: release-aab
+           path: app/build/outputs/bundle/release/app-release.aab
