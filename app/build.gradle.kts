@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "nl.freshlytyped.homelocation"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "nl.freshlytyped.homelocation"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
@@ -72,6 +72,6 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
     testImplementation("androidx.test:core:1.5.0")
-    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

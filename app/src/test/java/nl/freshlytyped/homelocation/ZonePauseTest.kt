@@ -8,10 +8,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class ZonePauseTest {
 
     private lateinit var context: Context
