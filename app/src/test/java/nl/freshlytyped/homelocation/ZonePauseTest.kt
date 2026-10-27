@@ -69,6 +69,18 @@ class ZonePauseTest {
     }
 
     @Test
+    fun `stale exit does not clear a different active zone`() {
+        settings.trackingEnabled = true
+        settings.currentZoneId = "home"
+        clockValue = 2_000L
+
+        coordinator.onZoneExited("work")
+
+        assertEquals("home", settings.currentZoneId)
+        assertEquals(0L, settings.lastZoneTransitionMs)
+    }
+
+    @Test
     fun `zone enter respects debounce - ignored when within window`() {
         settings.trackingEnabled = true
         settings.geofenceDebounceMs = 180_000L // 3 min
@@ -121,7 +133,7 @@ class ZonePauseTest {
     }
 
     @Test
-    fun `exit updates debounce window so quick re-entry is debounced`() {
+    fun `quick re-entry after exit restores the zone`() {
         settings.trackingEnabled = true
         settings.geofenceDebounceMs = 180_000L
         clockValue = 1_000L
@@ -133,11 +145,11 @@ class ZonePauseTest {
         assertNull(settings.currentZoneId)
         assertEquals(200_000L, settings.lastZoneTransitionMs)
 
-        // Quick re-entry should be debounced
+        // A quick re-entry should recover from a boundary-induced exit.
         clockValue = 250_000L // Only 50s after exit
         coordinator.onZoneEntered("home")
-        assertNull(settings.currentZoneId) // Still null (debounced)
-        assertEquals(200_000L, settings.lastZoneTransitionMs) // Not updated
+        assertEquals("home", settings.currentZoneId)
+        assertEquals(250_000L, settings.lastZoneTransitionMs)
     }
 
     @Test

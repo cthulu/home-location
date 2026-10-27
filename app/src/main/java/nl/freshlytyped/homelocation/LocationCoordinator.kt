@@ -174,6 +174,7 @@ class LocationCoordinator(
 
     fun onHeartbeat() {
         checkLocationCallbackHealth()
+        if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
     }
 
@@ -399,17 +400,14 @@ class LocationCoordinator(
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
         }
-        // Optimistic update suppresses duplicate publishes for rapid fixes.
-        settings.lastPublishedLat = fix.latitude
-        settings.lastPublishedLon = fix.longitude
-        // The UI and interval checks describe when the publish happened, not
-        // the timestamp attached to a potentially batched location fix.
-        settings.lastPublishedTimeMs = clock()
-        settings.lastPublishedAccuracyMeters = fix.accuracyMeters
         scope.launch {
             if (roamingPaused) return@launch
             publisher.publish(fix)
                 .onSuccess {
+                    settings.lastPublishedLat = fix.latitude
+                    settings.lastPublishedLon = fix.longitude
+                    settings.lastPublishedTimeMs = clock()
+                    settings.lastPublishedAccuracyMeters = fix.accuracyMeters
                     diagnosticsRecord("publish success state=${settings.movementState}")
                     Log.i(TAG, "Location published (state=${settings.movementState})")
                 }
@@ -484,7 +482,9 @@ class LocationCoordinator(
         val now = clock()
         val lastTransition = settings.lastZoneTransitionMs
         val debounceMs = settings.geofenceDebounceMs
-        if (lastTransition > 0L && now - lastTransition < debounceMs) {
+        val currentZoneId = settings.currentZoneId
+        if (currentZoneId == zoneId) return
+        if (currentZoneId != null && lastTransition > 0L && now - lastTransition < debounceMs) {
             diagnostics.record("zone_entered id=$zoneId debounce_ignored=true")
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
@@ -506,6 +506,11 @@ class LocationCoordinator(
 
     /** Called from [GeofenceReceiver] when the device exits a zone. */
     fun onZoneExited(zoneId: String) {
+        if (settings.currentZoneId != zoneId) {
+            diagnostics.record("zone_exited id=$zoneId stale_ignored=true")
+            Log.i(TAG, "Ignoring stale zone exit: $zoneId")
+            return
+        }
         settings.currentZoneId = null
         settings.lastZoneTransitionMs = clock()
         diagnostics.record("zone_exited id=$zoneId")

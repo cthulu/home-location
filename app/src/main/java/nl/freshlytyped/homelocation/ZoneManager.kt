@@ -122,11 +122,13 @@ class ZoneManager(
             addGeofences(geofences)
         }.build()
         try {
-            geofencingClient.addGeofences(request, pendingIntent)
+            geofencingClient.removeGeofences(pendingIntent).addOnCompleteListener {
+                geofencingClient.addGeofences(request, pendingIntent)
                 .addOnSuccessListener {
                     diagnostics.record("zone_geofences_registered count=${geofences.size}")
                     Log.i(TAG, "Registered ${geofences.size} geofences")
                 }
+            }
                 .addOnFailureListener { error: java.lang.Exception ->
                     diagnostics.record("zone_geofence_registration_failed ${error.javaClass.simpleName}")
                     Log.w(TAG, "Failed to register geofences", error)
