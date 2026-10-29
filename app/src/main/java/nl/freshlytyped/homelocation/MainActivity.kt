@@ -10,6 +10,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import nl.freshlytyped.homelocation.databinding.ActivityMainBinding
 import java.util.Locale
 import java.io.File
@@ -48,6 +50,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(
+                view.paddingLeft,
+                systemBars.top,
+                view.paddingRight,
+                systemBars.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
         setSupportActionBar(binding.toolbar)
 
         binding.btnGrantPermissions.setOnClickListener {
@@ -179,6 +192,15 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     View.VISIBLE
                 }
+        }
+
+        if (settings.geofencingEnabled) {
+            binding.tvCurrentZone.visibility = View.VISIBLE
+            binding.tvCurrentZone.text = settings.currentZoneId?.let {
+                getString(R.string.current_zone, it)
+            } ?: getString(R.string.outside_known_zones)
+        } else {
+            binding.tvCurrentZone.visibility = View.GONE
         }
 
         binding.tvLastPublished.text = formatLastPublished(settings)

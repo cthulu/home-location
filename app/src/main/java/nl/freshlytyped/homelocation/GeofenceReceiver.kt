@@ -22,21 +22,37 @@ class GeofenceReceiver : BroadcastReceiver() {
         val app = context.applicationContext as? App
             ?: throw IllegalStateException("Expected HomeLocation application")
         val coordinator = app.locationCoordinator
+        val diagnostics = app.diagnostics
 
         val geofencingEvent = GeofencingEvent.fromIntent(intent)
-                ?: throw IllegalStateException("Invalid geofence intent")
+            ?: run {
+                diagnostics.record("geofence_event_invalid_intent")
+                throw IllegalStateException("Invalid geofence intent")
+            }
 
         if (geofencingEvent.hasError()) {
+            diagnostics.record("geofence_event_error code=${geofencingEvent.errorCode}")
             Log.w(TAG, "Geofence error: ${geofencingEvent.errorCode}")
             return
         }
 
         val transition = geofencingEvent.geofenceTransition
-        val triggeredGeofences = geofencingEvent.triggeringGeofences ?: return
         val triggeringLocation = geofencingEvent.triggeringLocation
+        val triggeredGeofences = geofencingEvent.triggeringGeofences
+        diagnostics.record(
+            "geofence_event transition=$transition " +
+                "count=${triggeredGeofences?.size ?: 0} " +
+                "location=${triggeringLocation != null} " +
+                "accuracy=${triggeringLocation?.accuracy ?: -1f}"
+        )
+        if (triggeredGeofences == null) {
+            diagnostics.record("geofence_event_missing_triggered_geofences")
+            return
+        }
 
         for (geofence in triggeredGeofences) {
             val zoneId = geofence.requestId
+            diagnostics.record("geofence_transition transition=$transition id=$zoneId")
             when (transition) {
                 Geofence.GEOFENCE_TRANSITION_ENTER -> {
                     coordinator.onZoneEntered(zoneId)

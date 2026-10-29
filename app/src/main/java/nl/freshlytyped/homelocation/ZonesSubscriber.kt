@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -38,6 +39,7 @@ class ZonesSubscriber(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var streamJob: Job? = null
     @Volatile private var subscribeCall: Call? = null
+    @Volatile private var zoneResponseReceived = false
     private var reconnectAttempts = 0
 
     fun start() {
@@ -53,6 +55,7 @@ class ZonesSubscriber(
             diagnostics.record("zones_restored_from_cache count=${cachedZones.size}")
             zoneManager.updateZones(cachedZones)
         }
+        zoneResponseReceived = false
         streamJob = scope.launch { startStream() }
         diagnostics.record("zones_subscriber_started channel=${settings.channel}")
         Log.i(TAG, "ZonesSubscriber started, channel=${settings.channel}")
@@ -70,30 +73,42 @@ class ZonesSubscriber(
     private suspend fun startStream() {
         var timetoken: Long = 0
         var lastZoneRequestTime = 0L
+        var requestSent = false
+        val deadline = System.currentTimeMillis() + ZONE_FETCH_TIMEOUT_MS
 
-        while (streamJob?.isActive == true) {
-            // Connect phase
-            val connected = connectAndStream(timetoken, lastZoneRequestTime)
+        while (streamJob?.isActive == true && !zoneResponseReceived &&
+            System.currentTimeMillis() < deadline) {
+            val subscribe = scope.async {
+                connectAndStream(timetoken, lastZoneRequestTime)
+            }
+            // Let the subscribe request establish before publishing the
+            // request, so the response cannot be missed.
+            delay(SUBSCRIBE_START_DELAY_MS)
+            if (!requestSent) {
+                requestSent = publishZonesRequest(
+                    mapOf(
+                        "type" to "request_zones",
+                        "device_name" to settings.deviceName
+                    )
+                )
+            }
+            val connected = subscribe.await()
             val newTimetoken = connected.second
             lastZoneRequestTime = connected.third
             timetoken = newTimetoken
 
             if (!connected.first) {
-                // Connection failed — apply backoff
+                requestSent = false
                 reconnectAttempts++
                 val delayMs = backoffDelay(reconnectAttempts)
                 Log.w(TAG, "Stream disconnected, retrying in ${delayMs}ms (attempt $reconnectAttempts)")
                 delay(delayMs)
-                // Re-request zones on reconnection after a gap
-                if (connected.third == 0L || System.currentTimeMillis() - lastZoneRequestTime > RECONNECT_ZONE_REFRESH_MS) {
-                    requestZones()
-                    lastZoneRequestTime = System.currentTimeMillis()
-                }
             } else {
-                // Successful stream — reset backoff
                 reconnectAttempts = 0
             }
         }
+        diagnostics.record("zones_subscriber_finished received=$zoneResponseReceived")
+        streamJob = null
     }
 
     /**
@@ -114,15 +129,7 @@ class ZonesSubscriber(
                     return Triple(false, timetoken, lastZoneRequestTime)
                 }
 
-                // Connection successful — request zones on first connect
-                val currentZoneRequestTime = if (lastZoneRequestTime == 0L ||
-                    System.currentTimeMillis() - lastZoneRequestTime > PERIODIC_ZONE_REFRESH_MS
-                ) {
-                    requestZones()
-                    System.currentTimeMillis()
-                } else {
-                    lastZoneRequestTime
-                }
+                val currentZoneRequestTime = lastZoneRequestTime
 
                 val body = response.body?.string()
                     ?: return Triple(false, timetoken, currentZoneRequestTime)
@@ -162,15 +169,7 @@ class ZonesSubscriber(
     }
 
     /** Publish a request_zones message to the existing channel via REST. */
-    fun requestZones() {
-        scope.launch {
-            val payload = mapOf(
-                "type" to "request_zones",
-                "device_name" to settings.deviceName
-            )
-            publishZonesRequest(payload)
-        }
-    }
+    fun requestZones() = start()
 
     private suspend fun publishZonesRequest(payload: Map<String, String>): Boolean = withContext(Dispatchers.IO) {
         val publishUrl = "${LocationSettings.PUBNUB_BASE_URL}/publish/${settings.publishKey}/${settings.subscribeKey}/0/${settings.channel}/0"
@@ -217,6 +216,7 @@ class ZonesSubscriber(
         // Do not clear existing zones if a non-empty list only contains other devices
         // or malformed entries.
         if (rawZones.isEmpty() || zones.isNotEmpty()) {
+            zoneResponseReceived = true
             zoneManager.updateZones(zones)
         }
     }
@@ -270,14 +270,14 @@ class ZonesSubscriber(
         private const val MAX_BACKOFF_MS = 5 * 60_000L
 
         /** Request zones again after this much time since last request. */
-        private const val PERIODIC_ZONE_REFRESH_MS = 12 * 60 * 60_000L
+        private const val SUBSCRIBE_START_DELAY_MS = 100L
 
         /** Re-request zones on reconnect if the gap was this long. */
-        private const val RECONNECT_ZONE_REFRESH_MS = 30_000L
+        private const val ZONE_FETCH_TIMEOUT_MS = 30_000L
 
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(330, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build()
     }
 }

@@ -31,6 +31,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 
 /**
  * Owns all ongoing location infrastructure: the fused-location
@@ -49,7 +51,8 @@ class LocationCoordinator(
     private val publisher: LocationPublisher,
     private val requestFactory: LocationRequestFactory = LocationRequestFactory(),
     private val filter: LocationFilter = LocationFilter(),
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    private val zoneEntryHysteresisMs: Long = 60_000L
 ) {
 
     private val diagnostics = DiagnosticLogger(context)
@@ -64,6 +67,9 @@ class LocationCoordinator(
     @Volatile private var appInForeground = false
     private var directLocationCallback: LocationCallback? = null
     private var directLocationLooper: Looper? = null
+    private var pendingZoneEntryJob: Job? = null
+    private var pendingZoneEntryId: String? = null
+    private var pendingPublishInFlight = false
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
@@ -121,6 +127,7 @@ class LocationCoordinator(
             return
         }
         registerNetworkCallback()
+        retryPendingPublish()
         if (roamingPaused) return
         if (!appInForeground && !settings.backgroundLocationEnabled) {
             removeLocationRegistration()
@@ -166,7 +173,6 @@ class LocationCoordinator(
     fun refreshZones() {
         if (!settings.geofencingEnabled) return
         zonesSubscriber.start()
-        zonesSubscriber.requestZones()
     }
 
     /** Return the zone names currently cached on this device. */
@@ -337,19 +343,28 @@ class LocationCoordinator(
                 "distanceFromPublished=${publishedDistance ?: -1.0} state=${settings.movementState}"
         )
 
-        val decision = controller.observe(
-            MovementEvidence.Fix(fix),
-            settings.movementState,
-            settings.lastKnownLat,
-            settings.lastKnownLon,
-            settings.hasLastKnown(),
-            settings.accumulatedDistanceMeters,
-            settings.lastMovementEvidenceTimeMs,
-            now
-        )
+        val movementCooldownActive =
+            settings.movementState == MovementState.STATIONARY &&
+                now < settings.activityCooldownUntilMs
+        val decision = if (movementCooldownActive) {
+            MovementDecision.NoChange()
+        } else {
+            controller.observe(
+                MovementEvidence.Fix(fix),
+                settings.movementState,
+                settings.lastKnownLat,
+                settings.lastKnownLon,
+                settings.hasLastKnown(),
+                settings.accumulatedDistanceMeters,
+                settings.lastMovementEvidenceTimeMs,
+                now
+            )
+        }
 
         if (decision.isEvidence) {
             settings.lastMovementEvidenceTimeMs = now
+            settings.accumulatedDistanceMeters = 0f
+        } else if (movementCooldownActive) {
             settings.accumulatedDistanceMeters = 0f
         } else {
             settings.accumulatedDistanceMeters = controller.nextAccumulatedMeters(
@@ -400,22 +415,59 @@ class LocationCoordinator(
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
         }
+        storePendingIfNewer(fix)
+        publishAttempt(fix)
+    }
+
+    private fun storePendingIfNewer(fix: LocationFix) {
+        val pending = settings.pendingLocation
+        if (pending == null || fix.timeMs >= pending.timeMs) {
+            settings.pendingLocation = fix
+        }
+    }
+
+    private fun publishAttempt(fix: LocationFix) {
         scope.launch {
             if (roamingPaused) return@launch
             publisher.publish(fix)
                 .onSuccess {
-                    settings.lastPublishedLat = fix.latitude
-                    settings.lastPublishedLon = fix.longitude
-                    settings.lastPublishedTimeMs = clock()
-                    settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+                    markPublished(fix)
                     diagnosticsRecord("publish success state=${settings.movementState}")
                     Log.i(TAG, "Location published (state=${settings.movementState})")
                 }
                 .onFailure {
+                    storePendingIfNewer(fix)
                     diagnosticsRecord("publish failure category=${PublishFailureMapper.categoryFor(it)}")
                     Log.w(TAG, "Publish failed: ${PublishFailureMapper.categoryFor(it)}")
                 }
         }
+    }
+
+    private fun retryPendingPublish() {
+        if (pendingPublishInFlight || roamingPaused) return
+        val pending = settings.pendingLocation ?: return
+        pendingPublishInFlight = true
+        scope.launch {
+            publisher.publish(pending)
+                .onSuccess {
+                    markPublished(pending)
+                    diagnosticsRecord("pending_publish success")
+                }
+                .onFailure {
+                    diagnosticsRecord("pending_publish failure category=${PublishFailureMapper.categoryFor(it)}")
+                }
+            pendingPublishInFlight = false
+        }
+    }
+
+    private fun markPublished(fix: LocationFix) {
+        if (settings.pendingLocation?.timeMs == fix.timeMs) {
+            settings.pendingLocation = null
+        }
+        settings.lastPublishedLat = fix.latitude
+        settings.lastPublishedLon = fix.longitude
+        settings.lastPublishedTimeMs = clock()
+        settings.lastPublishedAccuracyMeters = fix.accuracyMeters
     }
 
     fun onActivityUpdate(activityType: Int, confidence: Int, timeMs: Long) {
@@ -489,6 +541,55 @@ class LocationCoordinator(
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
         }
+        if (zoneEntryHysteresisMs > 0L) {
+            pendingZoneEntryJob?.cancel()
+            pendingZoneEntryId = zoneId
+            diagnostics.record("zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs")
+            pendingZoneEntryJob = scope.launch {
+                delay(zoneEntryHysteresisMs)
+                confirmZoneEntry(zoneId)
+            }
+            return
+        }
+        applyZoneEntered(zoneId, now)
+    }
+
+    private fun confirmZoneEntry(zoneId: String) {
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) return
+        val zone = zoneManager.getZone(zoneId)
+        if (zone == null) {
+            diagnostics.record("zone_enter_rejected id=$zoneId reason=zone_not_found")
+            pendingZoneEntryId = null
+            return
+        }
+        oneShotLocationRequest(30_000L, forceBalanced = true)
+            .addOnSuccessListener { location ->
+                if (pendingZoneEntryId != zoneId) return@addOnSuccessListener
+                pendingZoneEntryId = null
+                if (location == null) {
+                    diagnostics.record("zone_enter_rejected id=$zoneId reason=no_location")
+                    return@addOnSuccessListener
+                }
+                val distance = GeoMath.distanceMeters(
+                    location.latitude,
+                    location.longitude,
+                    zone.latitude,
+                    zone.longitude
+                )
+                if (distance <= zone.radius) {
+                    publish(location.toFix())
+                    applyZoneEntered(zoneId, clock())
+                } else {
+                    diagnostics.record("zone_enter_rejected id=$zoneId reason=outside distanceMeters=$distance")
+                }
+            }
+            .addOnFailureListener {
+                pendingZoneEntryId = null
+                diagnostics.record("zone_enter_rejected id=$zoneId reason=location_failed")
+            }
+    }
+
+    private fun applyZoneEntered(zoneId: String, now: Long) {
         settings.currentZoneId = zoneId
         settings.lastZoneTransitionMs = now
         diagnostics.record("zone_entered id=$zoneId")
@@ -506,6 +607,12 @@ class LocationCoordinator(
 
     /** Called from [GeofenceReceiver] when the device exits a zone. */
     fun onZoneExited(zoneId: String) {
+        if (pendingZoneEntryId == zoneId) {
+            pendingZoneEntryJob?.cancel()
+            pendingZoneEntryJob = null
+            pendingZoneEntryId = null
+            diagnostics.record("zone_enter_cancelled id=$zoneId reason=exit_before_confirmation")
+        }
         if (settings.currentZoneId != zoneId) {
             diagnostics.record("zone_exited id=$zoneId stale_ignored=true")
             Log.i(TAG, "Ignoring stale zone exit: $zoneId")
@@ -755,6 +862,11 @@ class LocationCoordinator(
         val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return
         val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                super.onAvailable(network)
+                retryPendingPublish()
+            }
+
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 super.onCapabilitiesChanged(network, capabilities)
                 updateRoamingState(isCellularRoaming(capabilities))
@@ -849,7 +961,7 @@ class LocationCoordinator(
 
     companion object {
         private const val TAG = "HomeLocation"
-        private const val ACTIVITY_UPDATE_INTERVAL_MS = 30_000L
+        private const val ACTIVITY_UPDATE_INTERVAL_MS = 60_000L
         private const val MIN_MOVING_ACTIVITY_CONFIDENCE = 70
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
         private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L

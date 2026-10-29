@@ -41,7 +41,8 @@ class ZonePauseTest {
             settings = settings,
             permissions = permissions,
             publisher = publisher,
-            clock = { clockValue }
+            clock = { clockValue },
+            zoneEntryHysteresisMs = 0L
         )
     }
 
