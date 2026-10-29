@@ -6,7 +6,7 @@
     android:viewportHeight="108">
     <!-- Location pin with a home-shaped center. -->
     <path
-        android:fillColor="#1976D2"
+        android:fillColor="#D32F2F"
         android:pathData="M54,18 C37,18 24,31 24,47 C24,68 54,91 54,91 C54,91 84,68 84,47 C84,31 71,18 54,18 Z" />
     <path
         android:fillColor="#FFFFFF"
