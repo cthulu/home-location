@@ -33,6 +33,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Owns all ongoing location infrastructure: the fused-location
@@ -44,6 +46,13 @@ import kotlinx.coroutines.delay
  * and is called on boot, on heartbeat, and after every receiver wake so
  * the setup survives process death and app updates.
  */
+data class TrackingUiState(
+    val trackingEnabled: Boolean,
+    val movementState: MovementState,
+    val currentZoneId: String?,
+    val lastPublishedTimeMs: Long
+)
+
 class LocationCoordinator(
     private val context: Context,
     private val settings: LocationSettings,
@@ -73,6 +82,9 @@ class LocationCoordinator(
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
+    private val _uiState = MutableStateFlow(currentUiState())
+
+    val uiState: StateFlow<TrackingUiState> = _uiState
 
     private val controller: MovementStateController
         get() = MovementStateController(
@@ -93,6 +105,7 @@ class LocationCoordinator(
         }
         normalizeMovementState(clock())
         settings.trackingEnabled = true
+        publishUiState()
         if (settings.geofencingEnabled) {
             zoneManager.registerGeofences()
             zonesSubscriber.start()
@@ -114,6 +127,7 @@ class LocationCoordinator(
         releaseNetworkCallback()
         zoneManager.removeGeofences()
         settings.resetState()
+        publishUiState()
     }
 
     /**
@@ -468,6 +482,7 @@ class LocationCoordinator(
         settings.lastPublishedLon = fix.longitude
         settings.lastPublishedTimeMs = clock()
         settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+        publishUiState()
     }
 
     fun onActivityUpdate(activityType: Int, confidence: Int, timeMs: Long) {
@@ -592,6 +607,7 @@ class LocationCoordinator(
     private fun applyZoneEntered(zoneId: String, now: Long) {
         settings.currentZoneId = zoneId
         settings.lastZoneTransitionMs = now
+        publishUiState()
         diagnostics.record("zone_entered id=$zoneId")
         Log.i(TAG, "Zone entered: $zoneId — pausing tracking")
         if (settings.trackingEnabled) {
@@ -620,6 +636,7 @@ class LocationCoordinator(
         }
         settings.currentZoneId = null
         settings.lastZoneTransitionMs = clock()
+        publishUiState()
         diagnostics.record("zone_exited id=$zoneId")
         Log.i(TAG, "Zone exited: $zoneId — resuming tracking")
         if (settings.trackingEnabled) {
@@ -656,6 +673,18 @@ class LocationCoordinator(
 
             is MovementDecision.NoChange -> Unit
         }
+        publishUiState()
+    }
+
+    private fun currentUiState() = TrackingUiState(
+        trackingEnabled = settings.trackingEnabled,
+        movementState = settings.movementState,
+        currentZoneId = settings.currentZoneId,
+        lastPublishedTimeMs = settings.lastPublishedTimeMs
+    )
+
+    private fun publishUiState() {
+        _uiState.value = currentUiState()
     }
 
     // --- Registration helpers ---
