@@ -923,7 +923,8 @@ class LocationCoordinator(
 
     private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean =
         capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+                (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING))
 
     private fun updateRoamingState(roaming: Boolean) {
         if (roamingPaused == roaming) return

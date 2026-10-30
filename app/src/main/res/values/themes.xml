@@ -8,35 +8,4 @@
         <item name="android:textColorPrimary">@color/on_surface</item>
         <item name="android:textColorSecondary">@color/on_surface_secondary</item>
     </style>
-
-    <style name="SettingsNumberRow">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">8dp</item>
-        <item name="android:orientation">horizontal</item>
-    </style>
-
-    <style name="SettingsNumberField">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginEnd">8dp</item>
-        <item name="android:orientation">vertical</item>
-    </style>
-
-    <style name="SettingsNumberLabel">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginBottom">2dp</item>
-        <item name="android:textColor">@color/on_surface_secondary</item>
-        <item name="android:textSize">12sp</item>
-    </style>
-
-    <style name="SettingsNumberInput">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:background">@drawable/edittext_background</item>
-        <item name="android:padding">12dp</item>
-        <item name="android:singleLine">true</item>
-        <item name="android:textSize">14sp</item>
-    </style>
 </resources>

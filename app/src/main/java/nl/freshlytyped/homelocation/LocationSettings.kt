@@ -10,6 +10,7 @@ enum class MovementState {
     MOVING
 }
 
+@Suppress("UseKtx")
 class LocationSettings(context: Context) {
 
     companion object {
