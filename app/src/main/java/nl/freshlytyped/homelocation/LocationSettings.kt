@@ -3,12 +3,14 @@ package nl.freshlytyped.homelocation
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import org.json.JSONObject
 
 enum class MovementState {
     STATIONARY,
     MOVING
 }
 
+@Suppress("UseKtx")
 class LocationSettings(context: Context) {
 
     companion object {
@@ -48,6 +50,7 @@ class LocationSettings(context: Context) {
         private const val KEY_PERSISTED_ZONES = "persisted_zones"
         private const val KEY_CURRENT_ZONE_ID = "current_zone_id"
         private const val KEY_LAST_ZONE_TRANSITION_MS = "last_zone_transition_ms"
+        private const val KEY_PENDING_LOCATION = "pending_location"
 
         const val DEFAULT_CHANNEL = "home-location"
 
@@ -178,6 +181,31 @@ class LocationSettings(context: Context) {
     var lastPublishedAccuracyMeters: Float
         get() = prefs.getFloat(KEY_LAST_PUBLISHED_ACCURACY, 0f)
         set(value) = prefs.edit().putFloat(KEY_LAST_PUBLISHED_ACCURACY, value).apply()
+
+    var pendingLocation: LocationFix?
+        get() = prefs.getString(KEY_PENDING_LOCATION, null)?.let { raw ->
+            runCatching {
+                JSONObject(raw).let {
+                    LocationFix(
+                        it.getDouble("latitude"),
+                        it.getDouble("longitude"),
+                        it.getDouble("accuracy").toFloat(),
+                        it.getLong("time")
+                    )
+                }
+            }.getOrNull()
+        }
+        set(value) {
+            val raw = value?.let {
+                JSONObject().apply {
+                    put("latitude", it.latitude)
+                    put("longitude", it.longitude)
+                    put("accuracy", it.accuracyMeters)
+                    put("time", it.timeMs)
+                }.toString()
+            }
+            prefs.edit().putString(KEY_PENDING_LOCATION, raw).apply()
+        }
 
     var lastMovementEvidenceTimeMs: Long
         get() = prefs.getLong(KEY_LAST_EVIDENCE_TIME, 0L)

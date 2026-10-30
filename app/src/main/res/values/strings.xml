@@ -12,6 +12,8 @@
     <string name="movement_state">Movement state: %1$s</string>
     <string name="state_stationary">stationary</string>
     <string name="state_moving">moving (high accuracy)</string>
+    <string name="current_zone">Current zone: %1$s</string>
+    <string name="outside_known_zones">Current zone: outside known zones</string>
     <string name="last_published_never">Last published: never</string>
     <string name="last_published">Last published: %1$s (accuracy %2$s m)</string>
     <string name="pubnub_configured">PubNub: configured</string>
@@ -50,10 +52,6 @@
     <string name="settings_channel_hint">home-location</string>
     <string name="settings_device_name_label">Device name</string>
     <string name="settings_device_name_hint">Android device name</string>
-    <string name="settings_background_location_label">Allow background location collection</string>
-    <string name="settings_background_location_hint">When disabled, location is collected only while the app is open.</string>
-    <string name="settings_background_interval_label">Background scan interval (seconds)</string>
-    <string name="settings_background_interval_hint">120</string>
     <string name="settings_section_tracking">Tracking behavior</string>
     <string name="settings_precise_mode_label">High accuracy while moving</string>
     <string name="settings_precise_mode_hint">Uses GPS while moving (more battery), balanced accuracy while stationary.</string>

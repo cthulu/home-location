@@ -5,7 +5,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/surface"
     tools:context=".MainActivity">
 
     <androidx.appcompat.widget.Toolbar
@@ -53,6 +52,15 @@
 
             <TextView
                 android:id="@+id/tvMovementState"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="13sp"
+                android:textColor="@color/on_surface_secondary"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvCurrentZone"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"

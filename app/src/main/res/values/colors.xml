@@ -3,7 +3,6 @@
     <!-- Brand colors (same in both modes) -->
     <color name="primary">#1976D2</color>
     <color name="primary_light">#D7E9FC</color>
-    <color name="primary_dark">#0D47A1</color>
 
     <!-- Light mode surface colors -->
     <color name="surface">#FFFFFF</color>
@@ -12,7 +11,6 @@
     <color name="surface_variant">#F5F5F5</color>
 
     <!-- Semantic aliases (light mode defaults) -->
-    <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
     <color name="gray">#9E9E9E</color>
     <color name="success">#2E7D32</color>

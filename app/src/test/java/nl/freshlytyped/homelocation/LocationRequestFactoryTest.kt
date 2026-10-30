@@ -20,8 +20,8 @@ class LocationRequestFactoryTest {
     fun `moving with precise mode but no fine location falls back to balanced`() {
         val request = factory.forState(MovementState.MOVING, preciseMode = true, fineLocationGranted = false)
         assertEquals(Priority.PRIORITY_BALANCED_POWER_ACCURACY, request.priority)
-        assertEquals(60_000L, request.interval)
-        assertEquals(60_000L, request.maxUpdateDelayMillis)
+        assertEquals(120_000L, request.interval)
+        assertEquals(120_000L, request.maxUpdateDelayMillis)
     }
 
     @Test
@@ -34,8 +34,8 @@ class LocationRequestFactoryTest {
     fun `stationary uses balanced power accuracy with modest batching`() {
         val request = factory.forState(MovementState.STATIONARY, preciseMode = true, fineLocationGranted = true)
         assertEquals(Priority.PRIORITY_BALANCED_POWER_ACCURACY, request.priority)
-        assertEquals(60_000L, request.interval)
-        assertEquals(60_000L, request.maxUpdateDelayMillis)
+        assertEquals(120_000L, request.interval)
+        assertEquals(120_000L, request.maxUpdateDelayMillis)
     }
 
     @Test

@@ -25,6 +25,8 @@ class ZoneManager(
     private val diagnostics: DiagnosticLogger
 ) {
     private val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(context)
+    private var registrationInProgress = false
+    private var pendingRegistration: List<Zone>? = null
 
     val isInsideZone: Boolean
         get() = settings.isInsideZone
@@ -57,6 +59,8 @@ class ZoneManager(
         val json = settings.persistedZones ?: return emptyList()
         return runCatching { parseZones(json) }.getOrNull() ?: emptyList()
     }
+
+    fun getZone(zoneId: String): Zone? = getZones().firstOrNull { it.name == zoneId }
 
     /** Re-register geofences from the persisted zone list. Used on cold start. */
     fun registerGeofences() {
@@ -106,6 +110,15 @@ class ZoneManager(
 
     @SuppressLint("MissingPermission")
     private fun registerGeofencesInternal(zones: List<Zone>) {
+        synchronized(this) {
+            if (registrationInProgress) {
+                pendingRegistration = zones.toList()
+                diagnostics.record("zone_geofence_registration_queued count=${zones.size}")
+                return
+            }
+            registrationInProgress = true
+        }
+
         val geofences = zones.map { zone ->
             Geofence.Builder().apply {
                 setRequestId(zone.name)
@@ -128,15 +141,36 @@ class ZoneManager(
                     diagnostics.record("zone_geofences_registered count=${geofences.size}")
                     Log.i(TAG, "Registered ${geofences.size} geofences")
                 }
+                .addOnFailureListener { error ->
+                    val status = (error as? com.google.android.gms.common.api.ApiException)?.statusCode
+                    diagnostics.record(
+                        "zone_geofence_registration_failed " +
+                            "${error.javaClass.simpleName} status=${status ?: "unknown"}"
+                    )
+                    Log.w(TAG, "Failed to register geofences (status=${status ?: "unknown"})", error)
+                    completeRegistration()
+                }
+                .addOnCompleteListener { task ->
+                    if (task.isSuccessful) completeRegistration()
+                }
             }
                 .addOnFailureListener { error: java.lang.Exception ->
-                    diagnostics.record("zone_geofence_registration_failed ${error.javaClass.simpleName}")
-                    Log.w(TAG, "Failed to register geofences", error)
+                    diagnostics.record("zone_geofence_remove_failed ${error.javaClass.simpleName}")
+                    Log.w(TAG, "Failed to remove existing geofences", error)
                 }
         } catch (e: Throwable) {
             diagnostics.record("zone_geofence_request_rejected ${e.javaClass.simpleName}")
             Log.w(TAG, "Geofence request rejected", e)
+            completeRegistration()
         }
+    }
+
+    private fun completeRegistration() {
+        val next = synchronized(this) {
+            registrationInProgress = false
+            pendingRegistration.also { pendingRegistration = null }
+        }
+        if (next != null) registerGeofencesInternal(next)
     }
 
     private fun geofencePendingIntent(): PendingIntent {

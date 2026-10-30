@@ -30,7 +30,6 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true"
         android:theme="@style/Theme.HomeLocation"
-        android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
         <activity
