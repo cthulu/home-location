@@ -1,6 +1,7 @@
 package nl.freshlytyped.homelocation
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -11,6 +12,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -105,10 +107,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (startTrackingAfterPermission && permissions.notificationsGranted()) {
+        if (startTrackingAfterPermission && permissions.trackingAllowed() &&
+            permissions.notificationsGranted()
+        ) {
+            awaitingBackgroundPermission = false
             startTrackingAfterPermission = false
             app.locationSettings.trackingEnabled = true
             LocationTrackingService.start(this)
+            updateUi()
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && awaitingBackgroundPermission) {
+            awaitingBackgroundPermission = false
+            startTrackingAfterPermission = false
             updateUi()
         }
         // Re-assert registrations while the app is open (also recovers from
@@ -142,7 +151,26 @@ class MainActivity : AppCompatActivity() {
         val background = permissions.backgroundRequestPermissions()
         if (background.isNotEmpty()) {
             awaitingBackgroundPermission = true
-            permissionLauncher.launch(background)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.background_location_title)
+                    .setMessage(R.string.background_location_settings_message)
+                    .setNegativeButton(android.R.string.cancel) { _, _ ->
+                        awaitingBackgroundPermission = false
+                        startTrackingAfterPermission = false
+                    }
+                    .setPositiveButton(R.string.open_settings) { _, _ ->
+                        startActivity(
+                            Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:$packageName")
+                            )
+                        )
+                    }
+                    .show()
+            } else {
+                permissionLauncher.launch(background)
+            }
         }
     }
 
@@ -289,7 +317,7 @@ class MainActivity : AppCompatActivity() {
             zip.closeEntry()
             runCatching {
                 val process = Runtime.getRuntime().exec(
-                    arrayOf("logcat", "-d", "-v", "threadtime", "-T", "1 hour ago")
+                    arrayOf("logcat", "-d", "-v", "threadtime", "-T", "24 hours ago")
                 )
                 val output = process.inputStream.bufferedReader().useLines { lines ->
                     lines.filter { it.contains("HomeLocation") }.joinToString("\n")

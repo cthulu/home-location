@@ -14,7 +14,7 @@ class DiagnosticLogger(context: Context) {
     @Synchronized
     fun record(event: String) {
         val now = System.currentTimeMillis()
-        val cutoff = now - ONE_HOUR_MS
+        val cutoff = now - RETENTION_WINDOW_MS
         val retained = if (file.exists()) {
             file.readLines().filter { line ->
                 line.substringBefore('|').toLongOrNull()?.let { it >= cutoff } ?: false
@@ -36,6 +36,6 @@ class DiagnosticLogger(context: Context) {
 
     companion object {
         private const val FILE_NAME = "diagnostics.log"
-        private const val ONE_HOUR_MS = 60 * 60 * 1000L
+        private const val RETENTION_WINDOW_MS = 24 * 60 * 60 * 1000L
     }
 }
