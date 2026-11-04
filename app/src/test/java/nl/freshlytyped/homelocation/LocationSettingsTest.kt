@@ -31,7 +31,7 @@ class LocationSettingsTest {
         assertEquals(60_000L, settings.minPublishIntervalMs)
         assertEquals(50f, settings.minDistanceMeters)
         assertEquals(100f, settings.movementDetectionDistanceMeters)
-        assertEquals(15 * 60_000L, settings.maxLocationAgeMs)
+        assertEquals(10 * 60_000L, settings.maxLocationAgeMs)
         assertEquals(10 * 60_000L, settings.burstDurationMs)
         assertFalse(settings.periodicFallbackEnabled)
         assertTrue(settings.preciseMode)

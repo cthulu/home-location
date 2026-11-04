@@ -114,7 +114,7 @@ class LocationSettings(context: Context) {
 
     /** Fixes older than this are rejected. */
     var maxLocationAgeMs: Long
-        get() = prefs.getLong(KEY_MAX_AGE, 15 * MINUTE_MS)
+        get() = prefs.getLong(KEY_MAX_AGE, 10 * MINUTE_MS)
         set(value) = prefs.edit().putLong(KEY_MAX_AGE, value).apply()
 
     /** When enabled, a fix is published once per interval even without movement. */

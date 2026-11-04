@@ -425,6 +425,11 @@ class LocationCoordinator(
 
     private fun publish(fix: LocationFix) {
         if (roamingPaused) return
+        val invalidReason = validatePublishFix(fix)
+        if (invalidReason != null) {
+            diagnosticsRecord("publish rejected reason=${invalidReason.name.lowercase()}")
+            return
+        }
         if (!settings.isConfigured()) {
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
@@ -432,6 +437,13 @@ class LocationCoordinator(
         storePendingIfNewer(fix)
         publishAttempt(fix)
     }
+
+    private fun validatePublishFix(fix: LocationFix): RejectReason? = filter.validate(
+        fix,
+        clock(),
+        settings.maxLocationAgeMs,
+        settings.maxAccuracyMeters
+    )
 
     private fun storePendingIfNewer(fix: LocationFix) {
         val pending = settings.pendingLocation
@@ -450,9 +462,17 @@ class LocationCoordinator(
                     Log.i(TAG, "Location published (state=${settings.movementState})")
                 }
                 .onFailure {
-                    storePendingIfNewer(fix)
-                    diagnosticsRecord("publish failure category=${PublishFailureMapper.categoryFor(it)}")
-                    Log.w(TAG, "Publish failed: ${PublishFailureMapper.categoryFor(it)}")
+                    val invalidReason = validatePublishFix(fix)
+                    val category = PublishFailureMapper.categoryFor(it)
+                    if (invalidReason != null || isLocationRejected(category)) {
+                        clearPendingIfMatches(fix)
+                        val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
+                        diagnosticsRecord("publish rejected reason=$reason")
+                    } else {
+                        storePendingIfNewer(fix)
+                        diagnosticsRecord("publish failure category=$category")
+                        Log.w(TAG, "Publish failed: $category")
+                    }
                 }
         }
     }
@@ -460,6 +480,12 @@ class LocationCoordinator(
     private fun retryPendingPublish() {
         if (pendingPublishInFlight || roamingPaused) return
         val pending = settings.pendingLocation ?: return
+        val invalidReason = validatePublishFix(pending)
+        if (invalidReason != null) {
+            clearPendingIfMatches(pending)
+            diagnosticsRecord("pending_publish discarded reason=${invalidReason.name.lowercase()}")
+            return
+        }
         pendingPublishInFlight = true
         scope.launch {
             publisher.publish(pending)
@@ -468,11 +494,29 @@ class LocationCoordinator(
                     diagnosticsRecord("pending_publish success")
                 }
                 .onFailure {
-                    diagnosticsRecord("pending_publish failure category=${PublishFailureMapper.categoryFor(it)}")
+                    val reason = validatePublishFix(pending)
+                    val category = PublishFailureMapper.categoryFor(it)
+                    if (reason != null || isLocationRejected(category)) {
+                        clearPendingIfMatches(pending)
+                        val rejection = reason?.name?.lowercase() ?: category.name.lowercase()
+                        diagnosticsRecord("pending_publish discarded reason=$rejection")
+                    } else {
+                        diagnosticsRecord("pending_publish failure category=$category")
+                    }
                 }
             pendingPublishInFlight = false
         }
     }
+
+    private fun clearPendingIfMatches(fix: LocationFix) {
+        if (settings.pendingLocation?.timeMs == fix.timeMs) {
+            settings.pendingLocation = null
+        }
+    }
+
+    private fun isLocationRejected(category: PublishFailureCategory): Boolean =
+        category == PublishFailureCategory.STALE ||
+            category == PublishFailureCategory.INVALID_LOCATION
 
     private fun markPublished(fix: LocationFix) {
         if (settings.pendingLocation?.timeMs == fix.timeMs) {
@@ -585,14 +629,20 @@ class LocationCoordinator(
                     diagnostics.record("zone_enter_rejected id=$zoneId reason=no_location")
                     return@addOnSuccessListener
                 }
+                val fix = location.toFix()
+                val invalidReason = validatePublishFix(fix)
+                if (invalidReason != null) {
+                    diagnostics.record("zone_enter_rejected id=$zoneId reason=${invalidReason.name.lowercase()}")
+                    return@addOnSuccessListener
+                }
                 val distance = GeoMath.distanceMeters(
-                    location.latitude,
-                    location.longitude,
+                    fix.latitude,
+                    fix.longitude,
                     zone.latitude,
                     zone.longitude
                 )
                 if (distance <= zone.radius) {
-                    publish(location.toFix())
+                    publish(fix)
                     applyZoneEntered(zoneId, clock())
                 } else {
                     diagnostics.record("zone_enter_rejected id=$zoneId reason=outside distanceMeters=$distance")

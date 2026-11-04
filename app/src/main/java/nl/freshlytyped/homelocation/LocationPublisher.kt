@@ -20,7 +20,9 @@ enum class PublishFailureCategory {
     OFFLINE,
     TIMEOUT,
     CONFIGURATION,
-    SERVER
+    SERVER,
+    STALE,
+    INVALID_LOCATION
 }
 
 class PublishException(val category: PublishFailureCategory) : IOException(category.name)
@@ -54,7 +56,8 @@ object PublishFailureMapper {
 class LocationPublisher(
     private val settings: LocationSettings,
     private val client: OkHttpClient = defaultClient(),
-    private val retryDelayMs: suspend (Long) -> Unit = { delay(it) }
+    private val retryDelayMs: suspend (Long) -> Unit = { delay(it) },
+    private val clock: () -> Long = { System.currentTimeMillis() }
 ) {
 
     /**
@@ -62,6 +65,8 @@ class LocationPublisher(
      * backoff. Never logs coordinates or credentials.
      */
     suspend fun publish(fix: LocationFix): Result<Unit> = withContext(Dispatchers.IO) {
+        validateFix(fix)?.let { return@withContext Result.failure(it) }
+
         val publishKey = settings.publishKey
         val subscribeKey = settings.subscribeKey
         if (publishKey.isBlank() || subscribeKey.isBlank()) {
@@ -71,6 +76,7 @@ class LocationPublisher(
         val payload = LocationPayload.build(fix, settings.deviceName)
         var lastFailure: Throwable? = null
         for (attempt in 1..MAX_ATTEMPTS) {
+            validateFix(fix)?.let { return@withContext Result.failure(it) }
             val attemptResult = runCatching {
                 publishOnce(payload, publishKey, subscribeKey, settings.apiKey, settings.channel)
             }
@@ -85,6 +91,21 @@ class LocationPublisher(
             retryDelayMs(Backoff.msFor(attempt))
         }
         Result.failure(lastFailure ?: PublishException(PublishFailureCategory.SERVER))
+    }
+
+    private fun validateFix(fix: LocationFix): PublishException? {
+        val reason = LocationFilter().validate(
+            fix,
+            clock(),
+            settings.maxLocationAgeMs,
+            settings.maxAccuracyMeters
+        ) ?: return null
+        val category = if (reason == RejectReason.STALE) {
+            PublishFailureCategory.STALE
+        } else {
+            PublishFailureCategory.INVALID_LOCATION
+        }
+        return PublishException(category)
     }
 
     private fun publishOnce(

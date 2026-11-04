@@ -42,5 +42,7 @@ class PublishFailureMapperTest {
         assertTrue(mapper.isTransient(PublishFailureCategory.TIMEOUT))
         assertFalse(mapper.isTransient(PublishFailureCategory.CONFIGURATION))
         assertFalse(mapper.isTransient(PublishFailureCategory.SERVER))
+        assertFalse(mapper.isTransient(PublishFailureCategory.STALE))
+        assertFalse(mapper.isTransient(PublishFailureCategory.INVALID_LOCATION))
     }
 }

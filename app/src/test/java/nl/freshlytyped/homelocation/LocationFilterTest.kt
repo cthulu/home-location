@@ -15,7 +15,7 @@ class LocationFilterTest {
         fallback: Boolean = false,
         fallbackIntervalMs: Long = 30 * 60_000L,
         maxAccuracyMeters: Float = 50f,
-        maxAgeMs: Long = 15 * 60_000L,
+        maxAgeMs: Long = 10 * 60_000L,
         minDistanceMeters: Float = 50f
     ) = FilterContext(
         maxAccuracyMeters = maxAccuracyMeters,
@@ -109,12 +109,12 @@ class LocationFilterTest {
 
     @Test
     fun `fix at the maximum age is accepted`() {
-        expectAccept(fix(time = now - 15 * 60_000L), ctx(lastTime = 0))
+        expectAccept(fix(time = now - 10 * 60_000L), ctx(lastTime = 0))
     }
 
     @Test
     fun `stale fix is rejected`() {
-        expectReject(fix(time = now - 16 * 60_000L), ctx(lastTime = 0), RejectReason.STALE)
+        expectReject(fix(time = now - 10 * 60_000L - 1), ctx(lastTime = 0), RejectReason.STALE)
     }
 
     @Test

@@ -40,20 +40,8 @@ const val FUTURE_TOLERANCE_MS = 60_000L
 class LocationFilter {
 
     fun evaluate(fix: LocationFix, nowMs: Long, ctx: FilterContext): LocationDecision {
-        if (!fix.latitude.isFinite() || !fix.longitude.isFinite()) {
-            return reject(RejectReason.INVALID_COORDINATES)
-        }
-        if (fix.latitude !in -90.0..90.0 || fix.longitude !in -180.0..180.0) {
-            return reject(RejectReason.INVALID_COORDINATES)
-        }
-        if (!fix.accuracyMeters.isFinite() || fix.accuracyMeters > ctx.maxAccuracyMeters) {
-            return reject(RejectReason.BAD_ACCURACY)
-        }
-        if (fix.timeMs > nowMs + FUTURE_TOLERANCE_MS) {
-            return reject(RejectReason.FUTURE_TIMESTAMP)
-        }
-        if (nowMs - fix.timeMs > ctx.maxLocationAgeMs) {
-            return reject(RejectReason.STALE)
+        validate(fix, nowMs, ctx.maxLocationAgeMs, ctx.maxAccuracyMeters)?.let {
+            return reject(it)
         }
 
         if (ctx.lastPublishedTimeMs <= 0L) return LocationDecision.Accept
@@ -64,6 +52,30 @@ class LocationFilter {
             return LocationDecision.Accept
         }
         return reject(RejectReason.NO_CHANGE)
+    }
+
+    fun validate(
+        fix: LocationFix,
+        nowMs: Long,
+        maxLocationAgeMs: Long,
+        maxAccuracyMeters: Float
+    ): RejectReason? {
+        if (!fix.latitude.isFinite() || !fix.longitude.isFinite()) {
+            return RejectReason.INVALID_COORDINATES
+        }
+        if (fix.latitude !in -90.0..90.0 || fix.longitude !in -180.0..180.0) {
+            return RejectReason.INVALID_COORDINATES
+        }
+        if (!fix.accuracyMeters.isFinite() || fix.accuracyMeters > maxAccuracyMeters) {
+            return RejectReason.BAD_ACCURACY
+        }
+        if (fix.timeMs > nowMs + FUTURE_TOLERANCE_MS) {
+            return RejectReason.FUTURE_TIMESTAMP
+        }
+        if (nowMs - fix.timeMs > maxLocationAgeMs) {
+            return RejectReason.STALE
+        }
+        return null
     }
 
     private fun movedEnough(fix: LocationFix, ctx: FilterContext): Boolean =

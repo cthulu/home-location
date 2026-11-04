@@ -46,7 +46,7 @@ class LocationPublisherTest {
         server.shutdown()
     }
 
-    private fun fix() = LocationFix(52.123, 5.123, 12f, 1_760_000_000_000L)
+    private fun fix() = LocationFix(52.123, 5.123, 12f, System.currentTimeMillis())
 
     @Test
     fun `success posts the payload to the documented endpoint`() = runTest {
@@ -76,6 +76,20 @@ class LocationPublisherTest {
         assertTrue(result.isFailure)
         assertEquals(
             PublishFailureCategory.CONFIGURATION,
+            (result.exceptionOrNull() as PublishException).category
+        )
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `stale fixes are rejected without a network request`() = runTest {
+        val staleFix = fix().copy(timeMs = System.currentTimeMillis() - 10 * 60_000L - 1)
+
+        val result = publisher.publish(staleFix)
+
+        assertTrue(result.isFailure)
+        assertEquals(
+            PublishFailureCategory.STALE,
             (result.exceptionOrNull() as PublishException).category
         )
         assertEquals(0, server.requestCount)
@@ -121,7 +135,12 @@ class LocationPublisherTest {
                 .body("{}".toResponseBody())
                 .build()
         }.build()
-        val publisher = LocationPublisher(settings, client = timeoutClient, retryDelayMs = { })
+        val publisher = LocationPublisher(
+            settings,
+            client = timeoutClient,
+            retryDelayMs = { },
+            clock = { System.currentTimeMillis() }
+        )
         val result = publisher.publish(fix())
         assertTrue(result.isFailure)
         assertEquals(
@@ -129,6 +148,38 @@ class LocationPublisherTest {
             (result.exceptionOrNull() as PublishException).category
         )
         assertEquals(3, attempts)
+    }
+
+    @Test
+    fun `retry stops when fix becomes stale during backoff`() = runBlocking {
+        val fixTime = 1_000_000L
+        var now = fixTime
+        var attempts = 0
+        val timeoutClient = OkHttpClient.Builder().addInterceptor { chain ->
+            attempts++
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(408)
+                .message("Request Timeout")
+                .body("{}".toResponseBody())
+                .build()
+        }.build()
+        val publisher = LocationPublisher(
+            settings,
+            client = timeoutClient,
+            retryDelayMs = { now = fixTime + 10 * 60_000L + 1 },
+            clock = { now }
+        )
+
+        val result = publisher.publish(LocationFix(52.123, 5.123, 12f, fixTime))
+
+        assertTrue(result.isFailure)
+        assertEquals(
+            PublishFailureCategory.STALE,
+            PublishFailureMapper.categoryFor(result.exceptionOrNull()!!)
+        )
+        assertEquals(1, attempts)
     }
 
     @Test
