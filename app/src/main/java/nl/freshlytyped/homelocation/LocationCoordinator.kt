@@ -648,6 +648,8 @@ class LocationCoordinator(
 
     fun onBurstEnd() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
+        // The cap must win even when fixes keep arriving as movement evidence.
+        if (enforceHighAccuracyLimit(clock())) return
         val decision = controller.burstExpired(
             settings.movementState,
             settings.lastMovementEvidenceTimeMs,
@@ -1075,7 +1077,17 @@ class LocationCoordinator(
 
     private fun scheduleBurstRevert() {
         val alarm = alarmManager() ?: return
-        val triggerAt = SystemClock.elapsedRealtime() + settings.burstDurationMs
+        // Fire at the earlier of burst expiry and the high-accuracy cap, so
+        // MOVING never outlives the cap when no further fixes arrive.
+        val started = settings.movingStartedTimeMs
+        val capRemainingMs = if (started > 0L) {
+            (MAX_HIGH_ACCURACY_DURATION_MS - (clock() - started)).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        val delayMs = minOf(settings.burstDurationMs, capRemainingMs)
+            .coerceAtLeast(MIN_BURST_ALARM_DELAY_MS)
+        val triggerAt = SystemClock.elapsedRealtime() + delayMs
         runCatching {
             alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, burstEndPendingIntent())
         }.onFailure { Log.w(TAG, "Failed to schedule burst revert", it) }
@@ -1121,6 +1133,7 @@ class LocationCoordinator(
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
         private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
         private const val ACTIVITY_COOLDOWN_MS = 15 * 60_000L
+        private const val MIN_BURST_ALARM_DELAY_MS = 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2

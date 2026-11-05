@@ -16,6 +16,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -148,6 +149,11 @@ class ZonesSubscriber(
                     Triple(true, parsed.timetoken, currentZoneRequestTime)
                 }
             }
+        } catch (e: SocketTimeoutException) {
+            // Idle long-poll window elapsed with no messages: healthy, not an
+            // error. Reconnect immediately with the same timetoken instead of
+            // backing off and spamming diagnostics.
+            Triple(true, timetoken, lastZoneRequestTime)
         } catch (e: Throwable) {
             Log.w(TAG, "Stream error", e)
             diagnostics.record("zones_stream_error ${e.javaClass.simpleName}")
@@ -290,9 +296,12 @@ class ZonesSubscriber(
         /** Re-request zones on reconnect if the gap was this long. */
         private const val ZONE_FETCH_TIMEOUT_MS = 30_000L
 
+        /** Longer than the fetch deadline so one slow poll cannot churn reconnects. */
+        private const val READ_TIMEOUT_MS = 60_000L
+
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
     }
 }
