@@ -39,9 +39,13 @@ stateDiagram-v2
 
       Inside a known zone: tracking is paused entirely.
       Location requests, activity recognition, and publishing
-      are stopped. Only geofence monitoring and the PubNub
-      subscription remain active. Geofence EXIT resumes normal
-      tracking. Enter events are debounced to suppress flapping.
+      are stopped. Geofence monitoring, the PubNub subscription
+      and the heartbeat remain active — the heartbeat re-registers
+      the never-expiring geofences so zone exit survives process
+      death and geofence loss. Geofence EXIT resumes normal
+      tracking. Enter events are debounced to suppress flapping,
+      and geofences also use a dwell delay and an initial ENTER
+      trigger so a device booted inside a zone pauses immediately.
     end note
 ```
 

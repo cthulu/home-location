@@ -12,6 +12,7 @@ import android.app.PendingIntent
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
+import android.telephony.TelephonyManager
 import android.util.Log
 import android.annotation.SuppressLint
 import android.Manifest
@@ -20,6 +21,7 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
@@ -78,7 +80,9 @@ class LocationCoordinator(
     private var directLocationLooper: Looper? = null
     private var pendingZoneEntryJob: Job? = null
     private var pendingZoneEntryId: String? = null
-    private var pendingPublishInFlight = false
+    private val publishLock = Any()
+    private var publishInFlight = false
+    private var lastPublishedFixTimeMs = 0L
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
@@ -153,7 +157,9 @@ class LocationCoordinator(
             return
         }
 
-        // Pause all tracking when inside a zone: keep only geofencing and PubNub.
+        // Pause all tracking when inside a zone: keep geofencing, PubNub and
+        // the heartbeat (which re-registers geofences so zone exit survives
+        // process death and geofence loss).
         if (zoneManager.isInsideZone) {
             if (!zonePaused) {
                 zonePaused = true
@@ -164,6 +170,7 @@ class LocationCoordinator(
                 cancelPeriodicPublish()
                 diagnostics.record("zone_pause_active")
             }
+            scheduleHeartbeat()
             return
         }
 
@@ -196,6 +203,26 @@ class LocationCoordinator(
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
+    }
+
+    /**
+     * Called from [GeofenceReceiver] when Play services reports a geofence
+     * error. GEOFENCE_NOT_AVAILABLE fires when location is toggled off/on and
+     * clears all geofences, so re-register from the persisted zone list.
+     */
+    fun onGeofenceError(errorCode: Int) {
+        if (!settings.geofencingEnabled || !settings.trackingEnabled) return
+        if (errorCode == GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE) {
+            diagnostics.record("geofence_error_recovering code=$errorCode")
+            zoneManager.registerGeofences()
+        }
+    }
+
+    /** Re-register geofences from the persisted list (e.g. after boot when the service start is blocked). */
+    fun restoreGeofences() {
+        if (settings.geofencingEnabled && settings.trackingEnabled) {
+            zoneManager.registerGeofences()
+        }
     }
 
     fun onAppForegrounded() {
@@ -453,58 +480,98 @@ class LocationCoordinator(
     }
 
     private fun publishAttempt(fix: LocationFix) {
+        // Serialized via publishLock: a second fix queues as pending instead of
+        // racing the in-flight publish (out-of-order completion would corrupt
+        // the last-published baseline).
+        val start = synchronized(publishLock) {
+            if (publishInFlight) {
+                storePendingIfNewer(fix)
+                false
+            } else {
+                publishInFlight = true
+                true
+            }
+        }
+        if (!start) return
         scope.launch {
-            if (roamingPaused) return@launch
-            publisher.publish(fix)
-                .onSuccess {
-                    markPublished(fix)
-                    diagnosticsRecord("publish success state=${settings.movementState}")
-                    Log.i(TAG, "Location published (state=${settings.movementState})")
-                }
-                .onFailure {
-                    val invalidReason = validatePublishFix(fix)
-                    val category = PublishFailureMapper.categoryFor(it)
-                    if (invalidReason != null || isLocationRejected(category)) {
-                        clearPendingIfMatches(fix)
-                        val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
-                        diagnosticsRecord("publish rejected reason=$reason")
-                    } else {
-                        storePendingIfNewer(fix)
-                        diagnosticsRecord("publish failure category=$category")
-                        Log.w(TAG, "Publish failed: $category")
+            try {
+                publisher.publish(fix)
+                    .onSuccess {
+                        markPublished(fix)
+                        diagnosticsRecord("publish success state=${settings.movementState}")
+                        Log.i(TAG, "Location published (state=${settings.movementState})")
                     }
-                }
+                    .onFailure {
+                        val invalidReason = validatePublishFix(fix)
+                        val category = PublishFailureMapper.categoryFor(it)
+                        if (invalidReason != null || isLocationRejected(category)) {
+                            clearPendingIfMatches(fix)
+                            val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
+                            diagnosticsRecord("publish rejected reason=$reason")
+                        } else {
+                            storePendingIfNewer(fix)
+                            diagnosticsRecord("publish failure category=$category")
+                            Log.w(TAG, "Publish failed: $category")
+                        }
+                    }
+            } finally {
+                finishPublish()
+            }
         }
     }
 
+    private fun finishPublish() {
+        val next = synchronized(publishLock) {
+            publishInFlight = false
+            settings.pendingLocation
+        }
+        if (next != null) retryPendingPublish()
+    }
+
     private fun retryPendingPublish() {
-        if (pendingPublishInFlight || roamingPaused) return
-        val pending = settings.pendingLocation ?: return
+        if (roamingPaused) return
+        val start = synchronized(publishLock) {
+            if (publishInFlight) {
+                false
+            } else {
+                publishInFlight = true
+                true
+            }
+        }
+        if (!start) return
+        val pending = settings.pendingLocation
+        if (pending == null) {
+            synchronized(publishLock) { publishInFlight = false }
+            return
+        }
         val invalidReason = validatePublishFix(pending)
         if (invalidReason != null) {
             clearPendingIfMatches(pending)
             diagnosticsRecord("pending_publish discarded reason=${invalidReason.name.lowercase()}")
+            synchronized(publishLock) { publishInFlight = false }
             return
         }
-        pendingPublishInFlight = true
         scope.launch {
-            publisher.publish(pending)
-                .onSuccess {
-                    markPublished(pending)
-                    diagnosticsRecord("pending_publish success")
-                }
-                .onFailure {
-                    val reason = validatePublishFix(pending)
-                    val category = PublishFailureMapper.categoryFor(it)
-                    if (reason != null || isLocationRejected(category)) {
-                        clearPendingIfMatches(pending)
-                        val rejection = reason?.name?.lowercase() ?: category.name.lowercase()
-                        diagnosticsRecord("pending_publish discarded reason=$rejection")
-                    } else {
-                        diagnosticsRecord("pending_publish failure category=$category")
+            try {
+                publisher.publish(pending)
+                    .onSuccess {
+                        markPublished(pending)
+                        diagnosticsRecord("pending_publish success")
                     }
-                }
-            pendingPublishInFlight = false
+                    .onFailure {
+                        val reason = validatePublishFix(pending)
+                        val category = PublishFailureMapper.categoryFor(it)
+                        if (reason != null || isLocationRejected(category)) {
+                            clearPendingIfMatches(pending)
+                            val rejection = reason?.name?.lowercase() ?: category.name.lowercase()
+                            diagnosticsRecord("pending_publish discarded reason=$rejection")
+                        } else {
+                            diagnosticsRecord("pending_publish failure category=$category")
+                        }
+                    }
+            } finally {
+                synchronized(publishLock) { publishInFlight = false }
+            }
         }
     }
 
@@ -522,10 +589,15 @@ class LocationCoordinator(
         if (settings.pendingLocation?.timeMs == fix.timeMs) {
             settings.pendingLocation = null
         }
-        settings.lastPublishedLat = fix.latitude
-        settings.lastPublishedLon = fix.longitude
-        settings.lastPublishedTimeMs = clock()
-        settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+        synchronized(publishLock) {
+            // An older fix must never overwrite the baseline of a newer one.
+            if (fix.timeMs < lastPublishedFixTimeMs) return
+            lastPublishedFixTimeMs = fix.timeMs
+            settings.lastPublishedLat = fix.latitude
+            settings.lastPublishedLon = fix.longitude
+            settings.lastPublishedTimeMs = clock()
+            settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+        }
         publishUiState()
     }
 
@@ -576,6 +648,8 @@ class LocationCoordinator(
 
     fun onBurstEnd() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
+        // The cap must win even when fixes keep arriving as movement evidence.
+        if (enforceHighAccuracyLimit(clock())) return
         val decision = controller.burstExpired(
             settings.movementState,
             settings.lastMovementEvidenceTimeMs,
@@ -971,10 +1045,13 @@ class LocationCoordinator(
         runCatching { connectivity?.unregisterNetworkCallback(callback) }
     }
 
-    private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean =
-        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-                (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
-                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING))
+    private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean {
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return false
+        // NET_CAPABILITY_NOT_ROAMING only exists on API 28+; TelephonyManager
+        // works on every API level and needs no permission.
+        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        return telephony?.isNetworkRoaming == true
+    }
 
     private fun updateRoamingState(roaming: Boolean) {
         if (roamingPaused == roaming) return
@@ -1000,7 +1077,17 @@ class LocationCoordinator(
 
     private fun scheduleBurstRevert() {
         val alarm = alarmManager() ?: return
-        val triggerAt = SystemClock.elapsedRealtime() + settings.burstDurationMs
+        // Fire at the earlier of burst expiry and the high-accuracy cap, so
+        // MOVING never outlives the cap when no further fixes arrive.
+        val started = settings.movingStartedTimeMs
+        val capRemainingMs = if (started > 0L) {
+            (MAX_HIGH_ACCURACY_DURATION_MS - (clock() - started)).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        val delayMs = minOf(settings.burstDurationMs, capRemainingMs)
+            .coerceAtLeast(MIN_BURST_ALARM_DELAY_MS)
+        val triggerAt = SystemClock.elapsedRealtime() + delayMs
         runCatching {
             alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, burstEndPendingIntent())
         }.onFailure { Log.w(TAG, "Failed to schedule burst revert", it) }
@@ -1046,6 +1133,7 @@ class LocationCoordinator(
         private const val HEARTBEAT_INTERVAL_MS = 30 * 60_000L
         private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
         private const val ACTIVITY_COOLDOWN_MS = 15 * 60_000L
+        private const val MIN_BURST_ALARM_DELAY_MS = 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2

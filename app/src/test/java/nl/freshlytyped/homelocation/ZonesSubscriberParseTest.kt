@@ -39,6 +39,27 @@ class ZonesSubscriberParseTest {
     }
 
     @Test
+    fun `parseStreamMessage keeps full precision of 17-digit timetokens`() {
+        val json = """[[{"type":"zones"}],17000000000000002,"home-location"]"""
+        val result = parseStreamMessage(json)
+        assertEquals(17000000000000002L, result!!.timetoken)
+    }
+
+    @Test
+    fun `parseZones skips zones with invalid coordinates or radius`() {
+        val message = mapOf(
+            "type" to "zones",
+            "zones" to listOf(
+                mapOf("name" to "Home", "latitude" to 52.0, "longitude" to 5.0, "radius" to 150, "device_name" to "Pixel 8"),
+                mapOf("name" to "BadLat", "latitude" to 91.0, "longitude" to 5.0, "radius" to 150, "device_name" to "Pixel 8"),
+                mapOf("name" to "BadRadius", "latitude" to 52.0, "longitude" to 5.0, "radius" to 0, "device_name" to "Pixel 8")
+            )
+        )
+        val zones = parseZones(message, "Pixel 8")
+        assertEquals(listOf("Home"), zones.map { it.name })
+    }
+
+    @Test
     fun `parseZones filters by device name`() {
         val message = mapOf(
             "type" to "zones",
@@ -105,17 +126,24 @@ class ZonesSubscriberParseTest {
     // Replicate ZonesSubscriber parsing methods for testing
     private fun parseStreamMessage(json: String): StreamEntry? {
         return try {
-            val array = gson.fromJson(json, List::class.java)
-            if (array.size < 2) return null
-            val messages = (array[0] as? List<*>)
-                ?.filterIsInstance<Map<String, Any>>()
+            val array = com.google.gson.JsonParser.parseString(json).asJsonArray
+            if (array.size() < 2) return null
+            val messages = array[0].asJsonArray.mapNotNull { element ->
+                if (element.isJsonObject) {
+                    @Suppress("UNCHECKED_CAST")
+                    gson.fromJson(element, Map::class.java) as? Map<String, Any>
+                } else {
+                    null
+                }
+            }
+            val token = array[1].asJsonPrimitive
+            val timetoken = if (token.isNumber) token.asLong else token.asString.toLongOrNull()
                 ?: return null
-            val timetoken = array[1]?.toString()?.toLongOrNull() ?: return null
             StreamEntry(
                 timetoken = timetoken,
                 messages = messages
             )
-        } catch (_: com.google.gson.JsonSyntaxException) {
+        } catch (_: RuntimeException) {
             null
         }
     }
@@ -135,6 +163,7 @@ class ZonesSubscriberParseTest {
             val zoneDeviceName = raw["device_name"] as? String
             if (zoneDeviceName != deviceName) return@mapNotNull null
             Zone(name = name, latitude = lat, longitude = lon, radius = radius)
+                .takeIf { it.isValid() }
         }
     }
 

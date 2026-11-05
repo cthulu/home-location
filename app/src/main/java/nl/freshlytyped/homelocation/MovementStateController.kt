@@ -4,7 +4,6 @@ package nl.freshlytyped.homelocation
 sealed class MovementEvidence {
     data class Fix(val fix: nl.freshlytyped.homelocation.LocationFix) : MovementEvidence()
     data class Activity(val activityType: Int, val timeMs: Long) : MovementEvidence()
-    data object WifiLost : MovementEvidence()
 }
 
 /** Tunables the controller needs, snapshot from [LocationSettings]. */
@@ -32,8 +31,8 @@ sealed class MovementDecision {
 /**
  * Tracks whether the device is moving. Movement evidence comes from:
  * - activity recognition (in vehicle / on foot / on bike / walking / running)
- * - Wi-Fi network loss (opportunistic)
- * - accumulated travel distance across successive location fixes
+ * - accumulated travel distance across successive location fixes (including
+ *   the balanced one-shot fix requested on Wi-Fi loss)
  *
  * The controller is stateless between calls; the persisted state,
  * accumulated distance and evidence timestamp live in [LocationSettings]
@@ -74,8 +73,6 @@ class MovementStateController(private val config: MovementConfig) {
             } else {
                 MovementDecision.NoChange()
             }
-
-            is MovementEvidence.WifiLost -> markEvidence(state)
         }
     }
 

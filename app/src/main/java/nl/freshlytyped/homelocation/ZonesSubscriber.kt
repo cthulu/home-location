@@ -2,7 +2,7 @@ package nl.freshlytyped.homelocation
 
 import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.JsonSyntaxException
+import com.google.gson.JsonParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,6 +16,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -148,6 +149,11 @@ class ZonesSubscriber(
                     Triple(true, parsed.timetoken, currentZoneRequestTime)
                 }
             }
+        } catch (e: SocketTimeoutException) {
+            // Idle long-poll window elapsed with no messages: healthy, not an
+            // error. Reconnect immediately with the same timetoken instead of
+            // backing off and spamming diagnostics.
+            Triple(true, timetoken, lastZoneRequestTime)
         } catch (e: Throwable) {
             Log.w(TAG, "Stream error", e)
             diagnostics.record("zones_stream_error ${e.javaClass.simpleName}")
@@ -236,21 +242,36 @@ class ZonesSubscriber(
             val radius = (raw["radius"] as? Number)?.toInt() ?: return@mapNotNull null
             val zoneDeviceName = raw["device_name"] as? String
             if (zoneDeviceName != deviceName) return@mapNotNull null
-            Zone(name = name, latitude = lat, longitude = lon, radius = radius)
+            val zone = Zone(name = name, latitude = lat, longitude = lon, radius = radius)
+            if (!zone.isValid()) {
+                Log.w(TAG, "Ignoring invalid zone from PubNub: $name")
+                return@mapNotNull null
+            }
+            zone
         }
     }
 
     private fun parseStreamMessage(json: String): StreamEntry? {
         return try {
-            val array = Gson().fromJson(json, List::class.java)
-            if (array.size < 2) return null
+            val array = JsonParser.parseString(json).asJsonArray
+            if (array.size() < 2) return null
             // The legacy /subscribe endpoint returns [messages, timetoken, ...].
-            val messages = (array[0] as? List<*>)
-                ?.filterIsInstance<Map<String, Any>>()
+            val messages = array[0].asJsonArray.mapNotNull { element ->
+                if (element.isJsonObject) {
+                    @Suppress("UNCHECKED_CAST")
+                    Gson().fromJson(element, Map::class.java) as? Map<String, Any>
+                } else {
+                    null
+                }
+            }
+            // Parse the timetoken from the JSON element directly: Gson's
+            // List::class.java parsing turns 17-digit timetokens into Double,
+            // losing precision and making toLongOrNull fail.
+            val token = array[1].asJsonPrimitive
+            val timetoken = if (token.isNumber) token.asLong else token.asString.toLongOrNull()
                 ?: return null
-            val timetoken = array[1]?.toString()?.toLongOrNull() ?: return null
             StreamEntry(timetoken = timetoken, messages = messages)
-        } catch (_: JsonSyntaxException) {
+        } catch (_: RuntimeException) {
             null
         }
     }
@@ -275,9 +296,12 @@ class ZonesSubscriber(
         /** Re-request zones on reconnect if the gap was this long. */
         private const val ZONE_FETCH_TIMEOUT_MS = 30_000L
 
+        /** Longer than the fetch deadline so one slow poll cannot churn reconnects. */
+        private const val READ_TIMEOUT_MS = 60_000L
+
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
     }
 }
