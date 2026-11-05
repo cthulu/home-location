@@ -2,7 +2,7 @@ package nl.freshlytyped.homelocation
 
 import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.JsonSyntaxException
+import com.google.gson.JsonParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -247,15 +247,25 @@ class ZonesSubscriber(
 
     private fun parseStreamMessage(json: String): StreamEntry? {
         return try {
-            val array = Gson().fromJson(json, List::class.java)
-            if (array.size < 2) return null
+            val array = JsonParser.parseString(json).asJsonArray
+            if (array.size() < 2) return null
             // The legacy /subscribe endpoint returns [messages, timetoken, ...].
-            val messages = (array[0] as? List<*>)
-                ?.filterIsInstance<Map<String, Any>>()
+            val messages = array[0].asJsonArray.mapNotNull { element ->
+                if (element.isJsonObject) {
+                    @Suppress("UNCHECKED_CAST")
+                    Gson().fromJson(element, Map::class.java) as? Map<String, Any>
+                } else {
+                    null
+                }
+            }
+            // Parse the timetoken from the JSON element directly: Gson's
+            // List::class.java parsing turns 17-digit timetokens into Double,
+            // losing precision and making toLongOrNull fail.
+            val token = array[1].asJsonPrimitive
+            val timetoken = if (token.isNumber) token.asLong else token.asString.toLongOrNull()
                 ?: return null
-            val timetoken = array[1]?.toString()?.toLongOrNull() ?: return null
             StreamEntry(timetoken = timetoken, messages = messages)
-        } catch (_: JsonSyntaxException) {
+        } catch (_: RuntimeException) {
             null
         }
     }

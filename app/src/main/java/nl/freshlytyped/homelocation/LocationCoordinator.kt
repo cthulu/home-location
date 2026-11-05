@@ -12,6 +12,7 @@ import android.app.PendingIntent
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
+import android.telephony.TelephonyManager
 import android.util.Log
 import android.annotation.SuppressLint
 import android.Manifest
@@ -79,7 +80,9 @@ class LocationCoordinator(
     private var directLocationLooper: Looper? = null
     private var pendingZoneEntryJob: Job? = null
     private var pendingZoneEntryId: String? = null
-    private var pendingPublishInFlight = false
+    private val publishLock = Any()
+    private var publishInFlight = false
+    private var lastPublishedFixTimeMs = 0L
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
@@ -477,58 +480,98 @@ class LocationCoordinator(
     }
 
     private fun publishAttempt(fix: LocationFix) {
+        // Serialized via publishLock: a second fix queues as pending instead of
+        // racing the in-flight publish (out-of-order completion would corrupt
+        // the last-published baseline).
+        val start = synchronized(publishLock) {
+            if (publishInFlight) {
+                storePendingIfNewer(fix)
+                false
+            } else {
+                publishInFlight = true
+                true
+            }
+        }
+        if (!start) return
         scope.launch {
-            if (roamingPaused) return@launch
-            publisher.publish(fix)
-                .onSuccess {
-                    markPublished(fix)
-                    diagnosticsRecord("publish success state=${settings.movementState}")
-                    Log.i(TAG, "Location published (state=${settings.movementState})")
-                }
-                .onFailure {
-                    val invalidReason = validatePublishFix(fix)
-                    val category = PublishFailureMapper.categoryFor(it)
-                    if (invalidReason != null || isLocationRejected(category)) {
-                        clearPendingIfMatches(fix)
-                        val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
-                        diagnosticsRecord("publish rejected reason=$reason")
-                    } else {
-                        storePendingIfNewer(fix)
-                        diagnosticsRecord("publish failure category=$category")
-                        Log.w(TAG, "Publish failed: $category")
+            try {
+                publisher.publish(fix)
+                    .onSuccess {
+                        markPublished(fix)
+                        diagnosticsRecord("publish success state=${settings.movementState}")
+                        Log.i(TAG, "Location published (state=${settings.movementState})")
                     }
-                }
+                    .onFailure {
+                        val invalidReason = validatePublishFix(fix)
+                        val category = PublishFailureMapper.categoryFor(it)
+                        if (invalidReason != null || isLocationRejected(category)) {
+                            clearPendingIfMatches(fix)
+                            val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
+                            diagnosticsRecord("publish rejected reason=$reason")
+                        } else {
+                            storePendingIfNewer(fix)
+                            diagnosticsRecord("publish failure category=$category")
+                            Log.w(TAG, "Publish failed: $category")
+                        }
+                    }
+            } finally {
+                finishPublish()
+            }
         }
     }
 
+    private fun finishPublish() {
+        val next = synchronized(publishLock) {
+            publishInFlight = false
+            settings.pendingLocation
+        }
+        if (next != null) retryPendingPublish()
+    }
+
     private fun retryPendingPublish() {
-        if (pendingPublishInFlight || roamingPaused) return
-        val pending = settings.pendingLocation ?: return
+        if (roamingPaused) return
+        val start = synchronized(publishLock) {
+            if (publishInFlight) {
+                false
+            } else {
+                publishInFlight = true
+                true
+            }
+        }
+        if (!start) return
+        val pending = settings.pendingLocation
+        if (pending == null) {
+            synchronized(publishLock) { publishInFlight = false }
+            return
+        }
         val invalidReason = validatePublishFix(pending)
         if (invalidReason != null) {
             clearPendingIfMatches(pending)
             diagnosticsRecord("pending_publish discarded reason=${invalidReason.name.lowercase()}")
+            synchronized(publishLock) { publishInFlight = false }
             return
         }
-        pendingPublishInFlight = true
         scope.launch {
-            publisher.publish(pending)
-                .onSuccess {
-                    markPublished(pending)
-                    diagnosticsRecord("pending_publish success")
-                }
-                .onFailure {
-                    val reason = validatePublishFix(pending)
-                    val category = PublishFailureMapper.categoryFor(it)
-                    if (reason != null || isLocationRejected(category)) {
-                        clearPendingIfMatches(pending)
-                        val rejection = reason?.name?.lowercase() ?: category.name.lowercase()
-                        diagnosticsRecord("pending_publish discarded reason=$rejection")
-                    } else {
-                        diagnosticsRecord("pending_publish failure category=$category")
+            try {
+                publisher.publish(pending)
+                    .onSuccess {
+                        markPublished(pending)
+                        diagnosticsRecord("pending_publish success")
                     }
-                }
-            pendingPublishInFlight = false
+                    .onFailure {
+                        val reason = validatePublishFix(pending)
+                        val category = PublishFailureMapper.categoryFor(it)
+                        if (reason != null || isLocationRejected(category)) {
+                            clearPendingIfMatches(pending)
+                            val rejection = reason?.name?.lowercase() ?: category.name.lowercase()
+                            diagnosticsRecord("pending_publish discarded reason=$rejection")
+                        } else {
+                            diagnosticsRecord("pending_publish failure category=$category")
+                        }
+                    }
+            } finally {
+                synchronized(publishLock) { publishInFlight = false }
+            }
         }
     }
 
@@ -546,10 +589,15 @@ class LocationCoordinator(
         if (settings.pendingLocation?.timeMs == fix.timeMs) {
             settings.pendingLocation = null
         }
-        settings.lastPublishedLat = fix.latitude
-        settings.lastPublishedLon = fix.longitude
-        settings.lastPublishedTimeMs = clock()
-        settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+        synchronized(publishLock) {
+            // An older fix must never overwrite the baseline of a newer one.
+            if (fix.timeMs < lastPublishedFixTimeMs) return
+            lastPublishedFixTimeMs = fix.timeMs
+            settings.lastPublishedLat = fix.latitude
+            settings.lastPublishedLon = fix.longitude
+            settings.lastPublishedTimeMs = clock()
+            settings.lastPublishedAccuracyMeters = fix.accuracyMeters
+        }
         publishUiState()
     }
 
@@ -995,10 +1043,13 @@ class LocationCoordinator(
         runCatching { connectivity?.unregisterNetworkCallback(callback) }
     }
 
-    private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean =
-        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-                (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
-                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING))
+    private fun isCellularRoaming(capabilities: NetworkCapabilities): Boolean {
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return false
+        // NET_CAPABILITY_NOT_ROAMING only exists on API 28+; TelephonyManager
+        // works on every API level and needs no permission.
+        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        return telephony?.isNetworkRoaming == true
+    }
 
     private fun updateRoamingState(roaming: Boolean) {
         if (roamingPaused == roaming) return
