@@ -52,7 +52,7 @@ class LocationFilterTest {
     @Test
     fun `fix beyond minimum distance is accepted`() {
         // 0.001 degree of latitude is about 111 m, above the 50 m threshold
-        expectAccept(fix(lat = 52.001), ctx(lastLat = 52.0, lastTime = now - 30_000))
+        expectAccept(fix(lat = 52.001), ctx(lastLat = 52.0, lastTime = now - 61_000))
     }
 
     @Test
@@ -66,8 +66,17 @@ class LocationFilterTest {
     }
 
     @Test
-    fun `movement is accepted even inside the minimum publish interval`() {
-        expectAccept(fix(lat = 52.001), ctx(lastLat = 52.0, lastTime = now - 10_000))
+    fun `movement inside the minimum publish interval is debounced`() {
+        expectReject(
+            fix(lat = 52.001),
+            ctx(lastLat = 52.0, lastTime = now - 10_000),
+            RejectReason.NO_CHANGE
+        )
+    }
+
+    @Test
+    fun `movement after the minimum publish interval is accepted`() {
+        expectAccept(fix(lat = 52.001), ctx(lastLat = 52.0, lastTime = now - 61_000))
     }
 
     @Test

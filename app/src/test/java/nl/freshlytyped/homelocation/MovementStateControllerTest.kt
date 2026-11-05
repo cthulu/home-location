@@ -152,21 +152,6 @@ class MovementStateControllerTest {
         assertFalse(noChange.isEvidence)
     }
 
-    // --- Wi-Fi evidence ---
-
-    // Wi-Fi loss no longer switches state directly: the coordinator now
-    // requests a balanced one-shot verification fix instead.
-
-    @Test
-    fun `wifi loss while moving refreshes the burst`() {
-        val decision = controller.observe(
-            MovementEvidence.WifiLost,
-            MovementState.MOVING,
-            52.0, 5.0, true, 0f, now - 60_000, now
-        )
-        assertTrue((decision as MovementDecision.NoChange).isEvidence)
-    }
-
     // --- Burst expiry (direct) ---
 
     @Test

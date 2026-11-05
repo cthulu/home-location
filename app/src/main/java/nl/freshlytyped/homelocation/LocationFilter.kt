@@ -45,6 +45,9 @@ class LocationFilter {
         }
 
         if (ctx.lastPublishedTimeMs <= 0L) return LocationDecision.Accept
+        if (nowMs - ctx.lastPublishedTimeMs < ctx.minPublishIntervalMs) {
+            return reject(RejectReason.NO_CHANGE)
+        }
         if (movedEnough(fix, ctx)) return LocationDecision.Accept
         if (ctx.periodicFallbackEnabled &&
             nowMs - ctx.lastPublishedTimeMs >= ctx.periodicFallbackIntervalMs

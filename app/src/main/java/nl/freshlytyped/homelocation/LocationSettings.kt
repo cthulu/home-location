@@ -46,7 +46,6 @@ class LocationSettings(context: Context) {
         private const val KEY_ACCUMULATED_DISTANCE = "accumulated_distance_meters"
         private const val KEY_GEOFENCING_ENABLED = "geofencing_enabled"
         private const val KEY_GEOFENCE_DEBOUNCE_MS = "geofence_debounce_ms"
-        private const val KEY_LOW_FREQUENCY_INTERVAL_MS = "low_frequency_interval_ms"
         private const val KEY_PERSISTED_ZONES = "persisted_zones"
         private const val KEY_CURRENT_ZONE_ID = "current_zone_id"
         private const val KEY_LAST_ZONE_TRANSITION_MS = "last_zone_transition_ms"
@@ -233,11 +232,6 @@ class LocationSettings(context: Context) {
     var geofenceDebounceMs: Long
         get() = prefs.getLong(KEY_GEOFENCE_DEBOUNCE_MS, 180_000L)
         set(value) = prefs.edit().putLong(KEY_GEOFENCE_DEBOUNCE_MS, value).apply()
-
-    /** Location request interval inside a zone (default 5 min). */
-    var lowFrequencyIntervalMs: Long
-        get() = prefs.getLong(KEY_LOW_FREQUENCY_INTERVAL_MS, 300_000L)
-        set(value) = prefs.edit().putLong(KEY_LOW_FREQUENCY_INTERVAL_MS, value).apply()
 
     /** Zone list received from PubNub, persisted as JSON. */
     var persistedZones: String?
