@@ -236,7 +236,12 @@ class ZonesSubscriber(
             val radius = (raw["radius"] as? Number)?.toInt() ?: return@mapNotNull null
             val zoneDeviceName = raw["device_name"] as? String
             if (zoneDeviceName != deviceName) return@mapNotNull null
-            Zone(name = name, latitude = lat, longitude = lon, radius = radius)
+            val zone = Zone(name = name, latitude = lat, longitude = lon, radius = radius)
+            if (!zone.isValid()) {
+                Log.w(TAG, "Ignoring invalid zone from PubNub: $name")
+                return@mapNotNull null
+            }
+            zone
         }
     }
 
