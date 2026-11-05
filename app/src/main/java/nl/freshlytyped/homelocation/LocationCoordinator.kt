@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
@@ -153,7 +154,9 @@ class LocationCoordinator(
             return
         }
 
-        // Pause all tracking when inside a zone: keep only geofencing and PubNub.
+        // Pause all tracking when inside a zone: keep geofencing, PubNub and
+        // the heartbeat (which re-registers geofences so zone exit survives
+        // process death and geofence loss).
         if (zoneManager.isInsideZone) {
             if (!zonePaused) {
                 zonePaused = true
@@ -164,6 +167,7 @@ class LocationCoordinator(
                 cancelPeriodicPublish()
                 diagnostics.record("zone_pause_active")
             }
+            scheduleHeartbeat()
             return
         }
 
@@ -196,6 +200,26 @@ class LocationCoordinator(
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
+    }
+
+    /**
+     * Called from [GeofenceReceiver] when Play services reports a geofence
+     * error. GEOFENCE_NOT_AVAILABLE fires when location is toggled off/on and
+     * clears all geofences, so re-register from the persisted zone list.
+     */
+    fun onGeofenceError(errorCode: Int) {
+        if (!settings.geofencingEnabled || !settings.trackingEnabled) return
+        if (errorCode == GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE) {
+            diagnostics.record("geofence_error_recovering code=$errorCode")
+            zoneManager.registerGeofences()
+        }
+    }
+
+    /** Re-register geofences from the persisted list (e.g. after boot when the service start is blocked). */
+    fun restoreGeofences() {
+        if (settings.geofencingEnabled && settings.trackingEnabled) {
+            zoneManager.registerGeofences()
+        }
     }
 
     fun onAppForegrounded() {

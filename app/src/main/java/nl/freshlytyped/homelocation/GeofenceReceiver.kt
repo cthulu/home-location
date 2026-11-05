@@ -20,47 +20,58 @@ class GeofenceReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as? App
-            ?: throw IllegalStateException("Expected HomeLocation application")
+        if (app == null) {
+            Log.e(TAG, "Geofence event ignored: unexpected application context")
+            return
+        }
         val coordinator = app.locationCoordinator
         val diagnostics = app.diagnostics
 
-        val geofencingEvent = GeofencingEvent.fromIntent(intent)
-            ?: run {
+        val pendingResult = goAsync()
+        try {
+            val geofencingEvent = GeofencingEvent.fromIntent(intent)
+            if (geofencingEvent == null) {
                 diagnostics.record("geofence_event_invalid_intent")
-                throw IllegalStateException("Invalid geofence intent")
+                Log.w(TAG, "Ignoring invalid geofence intent")
+                return
             }
 
-        if (geofencingEvent.hasError()) {
-            diagnostics.record("geofence_event_error code=${geofencingEvent.errorCode}")
-            Log.w(TAG, "Geofence error: ${geofencingEvent.errorCode}")
-            return
-        }
+            if (geofencingEvent.hasError()) {
+                diagnostics.record("geofence_event_error code=${geofencingEvent.errorCode}")
+                Log.w(TAG, "Geofence error: ${geofencingEvent.errorCode}")
+                coordinator.onGeofenceError(geofencingEvent.errorCode)
+                return
+            }
 
-        val transition = geofencingEvent.geofenceTransition
-        val triggeringLocation = geofencingEvent.triggeringLocation
-        val triggeredGeofences = geofencingEvent.triggeringGeofences
-        diagnostics.record(
-            "geofence_event transition=$transition " +
-                "count=${triggeredGeofences?.size ?: 0} " +
-                "location=${triggeringLocation != null} " +
-                "accuracy=${triggeringLocation?.accuracy ?: -1f}"
-        )
-        if (triggeredGeofences == null) {
-            diagnostics.record("geofence_event_missing_triggered_geofences")
-            return
-        }
+            val transition = geofencingEvent.geofenceTransition
+            val triggeringLocation = geofencingEvent.triggeringLocation
+            val triggeredGeofences = geofencingEvent.triggeringGeofences
+            diagnostics.record(
+                "geofence_event transition=$transition " +
+                    "count=${triggeredGeofences?.size ?: 0} " +
+                    "location=${triggeringLocation != null} " +
+                    "accuracy=${triggeringLocation?.accuracy ?: -1f}"
+            )
+            if (triggeredGeofences == null) {
+                diagnostics.record("geofence_event_missing_triggered_geofences")
+                return
+            }
 
-        for (geofence in triggeredGeofences) {
-            val zoneId = geofence.requestId
-            diagnostics.record("geofence_transition transition=$transition id=$zoneId")
-            when (transition) {
-                Geofence.GEOFENCE_TRANSITION_ENTER -> {
-                    coordinator.onZoneEntered(zoneId)
-                }
-                Geofence.GEOFENCE_TRANSITION_EXIT -> {
-                    coordinator.onZoneExited(zoneId)
+            for (geofence in triggeredGeofences) {
+                val zoneId = geofence.requestId
+                diagnostics.record("geofence_transition transition=$transition id=$zoneId")
+                when (transition) {
+                    Geofence.GEOFENCE_TRANSITION_ENTER,
+                    Geofence.GEOFENCE_TRANSITION_DWELL -> {
+                        coordinator.onZoneEntered(zoneId)
+                    }
+                    Geofence.GEOFENCE_TRANSITION_EXIT -> {
+                        coordinator.onZoneExited(zoneId)
+                    }
                 }
             }
+        } finally {
+            pendingResult.finish()
         }
     }
 

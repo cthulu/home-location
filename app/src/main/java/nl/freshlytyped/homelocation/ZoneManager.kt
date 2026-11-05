@@ -12,7 +12,6 @@ import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 /**
  * Manages zone definitions received from Home Assistant via PubNub.
@@ -118,46 +117,62 @@ class ZoneManager(
             }
             registrationInProgress = true
         }
-
-        val geofences = zones.map { zone ->
-            Geofence.Builder().apply {
-                setRequestId(zone.name)
-                setCircularRegion(zone.latitude, zone.longitude, zone.radius.toFloat())
-                setExpirationDuration(TimeUnit.HOURS.toMillis(24))
-                setTransitionTypes(
-                    Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT
-                )
-            }.build()
-        }
-        if (geofences.isEmpty()) return
-        val pendingIntent = geofencePendingIntent()
-        val request = GeofencingRequest.Builder().apply {
-            addGeofences(geofences)
-        }.build()
         try {
+            val validZones = zones.filter { it.isValid() }
+            val invalidCount = zones.size - validZones.size
+            if (invalidCount > 0) {
+                diagnostics.record("zone_geofence_invalid_skipped count=$invalidCount")
+                Log.w(TAG, "Skipping $invalidCount invalid zone(s)")
+            }
+            if (validZones.size > MAX_GEOFENCES) {
+                diagnostics.record(
+                    "zone_geofence_limit_exceeded count=${validZones.size} max=$MAX_GEOFENCES"
+                )
+                Log.w(TAG, "Too many zones (${validZones.size}); registering first $MAX_GEOFENCES")
+            }
+            val geofences = validZones.take(MAX_GEOFENCES).map { zone ->
+                Geofence.Builder().apply {
+                    setRequestId(zone.name)
+                    setCircularRegion(zone.latitude, zone.longitude, zone.radius.toFloat())
+                    setExpirationDuration(Geofence.NEVER_EXPIRE)
+                    setLoiteringDelay(LOITERING_DELAY_MS)
+                    setTransitionTypes(
+                        Geofence.GEOFENCE_TRANSITION_ENTER or
+                            Geofence.GEOFENCE_TRANSITION_EXIT or
+                            Geofence.GEOFENCE_TRANSITION_DWELL
+                    )
+                }.build()
+            }
+            if (geofences.isEmpty()) {
+                completeRegistration()
+                return
+            }
+            val pendingIntent = geofencePendingIntent()
+            val request = GeofencingRequest.Builder().apply {
+                setInitialTrigger(
+                    GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_DWELL
+                )
+                addGeofences(geofences)
+            }.build()
             geofencingClient.removeGeofences(pendingIntent).addOnCompleteListener {
                 geofencingClient.addGeofences(request, pendingIntent)
-                .addOnSuccessListener {
-                    diagnostics.record("zone_geofences_registered count=${geofences.size}")
-                    Log.i(TAG, "Registered ${geofences.size} geofences")
-                }
-                .addOnFailureListener { error ->
-                    val status = (error as? com.google.android.gms.common.api.ApiException)?.statusCode
-                    diagnostics.record(
-                        "zone_geofence_registration_failed " +
-                            "${error.javaClass.simpleName} status=${status ?: "unknown"}"
-                    )
-                    Log.w(TAG, "Failed to register geofences (status=${status ?: "unknown"})", error)
-                    completeRegistration()
-                }
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) completeRegistration()
-                }
+                    .addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            diagnostics.record("zone_geofences_registered count=${geofences.size}")
+                            Log.i(TAG, "Registered ${geofences.size} geofences")
+                        } else {
+                            val error = task.exception
+                            val status =
+                                (error as? com.google.android.gms.common.api.ApiException)?.statusCode
+                            diagnostics.record(
+                                "zone_geofence_registration_failed " +
+                                    "${error?.javaClass?.simpleName} status=${status ?: "unknown"}"
+                            )
+                            Log.w(TAG, "Failed to register geofences (status=${status ?: "unknown"})", error)
+                        }
+                        completeRegistration()
+                    }
             }
-                .addOnFailureListener { error: java.lang.Exception ->
-                    diagnostics.record("zone_geofence_remove_failed ${error.javaClass.simpleName}")
-                    Log.w(TAG, "Failed to remove existing geofences", error)
-                }
         } catch (e: Throwable) {
             diagnostics.record("zone_geofence_request_rejected ${e.javaClass.simpleName}")
             Log.w(TAG, "Geofence request rejected", e)
@@ -192,5 +207,11 @@ class ZoneManager(
     companion object {
         private const val TAG = "ZoneManager"
         private const val REQUEST_CODE_GEOFENCE = 10
+
+        /** Play services limit per app; excess zones are skipped. */
+        private const val MAX_GEOFENCES = 100
+
+        /** Dwell delay so GPS jitter at a zone boundary does not flap ENTER/EXIT. */
+        private const val LOITERING_DELAY_MS = 60_000
     }
 }
