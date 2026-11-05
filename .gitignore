@@ -1,6 +1,7 @@
 # Android build output
 build/
 app/build/
+app/release/
 
 # Gradle
 .gradle/
