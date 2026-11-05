@@ -1,8 +1,8 @@
 # Android Docker Sandbox image
 
-This image extends [`nikbucher/sbx-opencode2`](https://github.com/nikbucher/sbx-opencode2) with JDK 21 and Android SDK 36, matching this project's Java target and `compileSdk`/`targetSdk`. The image is explicitly built for `linux/arm64` (AArch64), and the JDK runs natively.
+This image extends [`nikbucher/sbx-opencode2`](https://github.com/nikbucher/sbx-opencode2) with JDK 21 and the AArch64 GNU/Linux build of [Android SDK Custom](https://github.com/HomuHomu833/android-sdk-custom) 36.0.1. The archive supplies AArch64 SDK tools and Build Tools 36.1.0; sdkmanager installs Android platform 36 to match this project's `compileSdk`/`targetSdk`. The image is explicitly built for `linux/arm64` (AArch64), so both the JDK and Android SDK tools run natively.
 
-The Android SDK is installed under `/opt/android-sdk`, with `ANDROID_HOME` and `ANDROID_SDK_ROOT` set. The image includes Android platform 36, Build Tools 36.0.0, and platform-tools. **Google's Linux SDK command-line tools and native platform-tools (including `adb`) are x86-64 binaries, not AArch64.** They therefore require x86-64 QEMU/binfmt emulation in the sandbox runtime; this is not a fully native Android toolchain. Configure Docker's x86-64 emulation support for the SBX runtime before building/running this image. On Linux Docker hosts, this is commonly registered with `docker run --privileged --rm tonistiigi/binfmt --install amd64`; Docker Desktop manages emulation separately. If the SBX runtime does not provide binfmt emulation, Gradle's native Android build tools will not run in this ARM64 image.
+The Android SDK is installed under `/opt/android-sdk`, with `ANDROID_HOME` and `ANDROID_SDK_ROOT` set. The image downloads a version-pinned SDK archive and verifies its SHA-256 checksum during the build. The archive supplies AArch64 SDK command-line tools, platform-tools, and build-tools; sdkmanager installs the Android 36 platform data package. Gradle is configured to use the SDK's AArch64 `aapt2` rather than downloading its x86-64 Maven binary. No x86-64 emulation is required.
 
 Build and load the image from the repository root:
 
@@ -24,6 +24,8 @@ Inside the sandbox, run the project's Gradle tasks as usual:
 ./gradlew assembleDebug
 ./gradlew testDebugUnitTest
 ```
+
+If the mounted workspace contains a host-specific `local.properties`, make sure its `sdk.dir` does not point to the host's SDK; remove that entry inside the sandbox so Gradle uses `ANDROID_HOME`.
 
 To confirm the toolchain is available:
 
