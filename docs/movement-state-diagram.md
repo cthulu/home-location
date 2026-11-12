@@ -117,7 +117,9 @@ location update re-evaluates it, so the entry is confirmed as soon as a usable
 fix arrives. A missing zone clears it immediately. The pending entry is bounded
 by a confirmation window (10 minutes): if no usable fix arrives within it, the
 entry expires rather than lingering. The window is checked on each update and on
-the heartbeat as a backstop.
+the heartbeat as a backstop. The pending entry also tracks the persisted zone
+list: if a new zone list no longer contains the armed zone, the entry is dropped
+immediately rather than lingering until the window expires.
 
 ### Zone exit
 

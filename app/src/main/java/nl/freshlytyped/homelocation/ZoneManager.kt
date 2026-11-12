@@ -21,7 +21,8 @@ import org.json.JSONObject
 class ZoneManager(
     private val context: Context,
     private val settings: LocationSettings,
-    private val diagnostics: DiagnosticLogger
+    private val diagnostics: DiagnosticLogger,
+    private val onZonesUpdated: (zoneIds: List<String>) -> Unit = {}
 ) {
     private val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(context)
     private var registrationInProgress = false
@@ -43,6 +44,7 @@ class ZoneManager(
         settings.persistedZones = json
         if (zones.isEmpty()) {
             settings.currentZoneId = null
+            onZonesUpdated(emptyList())
             removeGeofences()
             return
         }
@@ -50,6 +52,7 @@ class ZoneManager(
         if (settings.currentZoneId != null && !ids.contains(settings.currentZoneId)) {
             settings.currentZoneId = null
         }
+        onZonesUpdated(ids.toList())
         registerGeofencesInternal(zones)
     }
 

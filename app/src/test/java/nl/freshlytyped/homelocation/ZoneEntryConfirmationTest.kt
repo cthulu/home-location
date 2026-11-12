@@ -68,6 +68,9 @@ class ZoneEntryConfirmationTest {
         }.toString()
     }
 
+    private fun zone(name: String, latitude: Double = 52.0, longitude: Double = 5.0) =
+        Zone(name = name, latitude = latitude, longitude = longitude, radius = 150)
+
     private fun fixAt(latitude: Double, longitude: Double, accuracy: Float, ageMs: Long = 0L) =
         Location("test").apply {
             this.latitude = latitude
@@ -213,6 +216,49 @@ class ZoneEntryConfirmationTest {
 
         assertNull(settings.currentZoneId)
         assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+    }
+
+    @Test
+    fun `a pending entry is dropped when its armed zone is removed from the list`() {
+        // cgu is armed; office sits ~2 km east so a cgu fix can never confirm it.
+        settings.maxLocationAgeMs = 10 * 60_000L
+        coordinator.testZoneManager.updateZones(
+            listOf(zone("cgu"), zone("office", latitude = 52.0, longitude = 5.018))
+        )
+
+        // Stale triggering fix at cgu's center: the entry arms but stays
+        // pending (stale, not usable); cgu exists in the list.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f, ageMs = 11 * 60_000L))
+        assertNull(settings.currentZoneId)
+
+        // Prove the pending entry is still alive: a fresh usable fix within the
+        // window re-evaluates it and confirms "cgu".
+        clockValue += 5 * 60_000L // still inside the 10-minute window
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+        assertEquals("cgu", settings.currentZoneId)
+        assertEquals(clockValue, settings.lastZoneTransitionMs)
+
+        // Re-arm a pending entry with another stale cgu fix.
+        settings.currentZoneId = null
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f, ageMs = 11 * 60_000L))
+        assertNull(settings.currentZoneId)
+        // The pending entry is "cgu" again.
+        assertEquals("cgu", coordinator.testPendingZoneEntryId)
+
+        // Apply a new zone list that no longer contains "cgu" (the real
+        // updateZones boundary, which must drop the pending entry).
+        clockValue += 5 * 60_000L // still inside the 10-minute window
+        coordinator.testZoneManager.updateZones(listOf(zone("office", latitude = 52.0, longitude = 5.018)))
+        // The pending entry must be gone right after the list update.
+        assertNull(coordinator.testPendingZoneEntryId)
+
+        // A fresh usable fix at cgu's center: if the "cgu" entry had lingered it
+        // would be re-evaluated and confirmed (currentZoneId -> "cgu"). It must
+        // not — only "office" exists, and the fix is ~2 km from it.
+        clockValue += 5 * 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+
+        assertNull(settings.currentZoneId)
     }
 
     @Test

@@ -3,6 +3,9 @@ build/
 app/build/
 app/release/
 
+# Captured device diagnostics
+tmp/
+
 # Gradle
 .gradle/
 local.properties

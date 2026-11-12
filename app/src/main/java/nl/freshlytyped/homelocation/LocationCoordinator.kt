@@ -74,8 +74,17 @@ class LocationCoordinator(
     private val zoneEntryWindowMs: Long = 10 * 60_000L
 ) {
 
-    private val zoneManager = ZoneManager(context, settings, diagnostics)
+    private val zoneManager = ZoneManager(
+        context, settings, diagnostics,
+        onZonesUpdated = ::onZonesUpdated
+    )
     private val zonesSubscriber = ZonesSubscriber(settings, zoneManager, diagnostics)
+
+    /** Exposed for tests in the same package to drive the zone-update boundary. */
+    internal val testZoneManager: ZoneManager get() = zoneManager
+
+    /** Exposed for tests to observe the pending zone entry id. */
+    internal val testPendingZoneEntryId: String? get() = pendingZoneEntryId
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
@@ -819,6 +828,18 @@ class LocationCoordinator(
         pendingZoneEntryJob = null
         pendingZoneEntryId = null
         pendingZoneEntryArmedAtMs = 0L
+    }
+
+    /**
+     * Drops the pending entry when the armed zone has been removed from the
+     * persisted zone list, so a pending entry never outlives the zone that
+     * armed it. Called from [ZoneManager.updateZones] when a new list is applied.
+     */
+    private fun onZonesUpdated(zoneIds: List<String>) {
+        val pendingZoneId = pendingZoneEntryId ?: return
+        if (zoneIds.contains(pendingZoneId)) return
+        clearPendingZoneEntry()
+        diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
     }
 
     /**
