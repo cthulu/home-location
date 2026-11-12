@@ -1,5 +1,5 @@
 # no-mistakes repository configuration.
-# commands.* is read from the pushed branch for this single-developer repo.
+# commands.* is read from the trusted default branch for this single-developer repo.
 allow_repo_commands: true
 
 commands:
@@ -13,9 +13,24 @@ test:
   instructions: |
     The Gradle unit test command (./gradlew testDebugUnitTest) is the
     authoritative local validation for this repository, and the pipeline's
-    prepare step pins the Android SDK for it. Do not start emulators, do not
-    drive the app through adb, and do not stand up mock backends.
-    If the unit tests pass, the Test step is complete; if they fail, report
-    the failing tests and stop.
+    prepare step pins the Android SDK for it.
+    Do not start Android emulators, do not drive the app through adb, and do
+    not stand up mock PubNub or other mock backends: this is a background
+    foreground service with no interactive UI, so there is no live product
+    surface to drive.
+    When a change is covered by the unit-test baseline, return the no-surface
+    verdict with every scenario untested and a reason naming the Gradle
+    baseline as the validation; remote CI (the registered ci.yml workflow)
+    owns regression, and this step must not attempt end-to-end app driving.
+  path_instructions:
+    - path: "app/src/main/java/nl/freshlytyped/homelocation/**"
+      instructions: |
+        This Android app is a battery-conscious background foreground service
+        with no interactive UI; there is no live product surface no-mistakes
+        can drive end to end. Return the no-surface verdict with every scenario
+        untested (live: false), naming the Gradle unit-test baseline
+        (./gradlew testDebugUnitTest) as the local validation and the registered
+        GitHub CI workflow as the regression gate. Do not start emulators, adb
+        sessions, or mock PubNub backends.
   evidence:
     store_in_repo: false
