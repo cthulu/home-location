@@ -70,7 +70,8 @@ class LocationCoordinator(
     private val requestFactory: LocationRequestFactory = LocationRequestFactory(),
     private val filter: LocationFilter = LocationFilter(),
     private val clock: () -> Long = { System.currentTimeMillis() },
-    private val zoneEntryHysteresisMs: Long = 60_000L
+    private val zoneEntryHysteresisMs: Long = 60_000L,
+    private val zoneEntryWindowMs: Long = 10 * 60_000L
 ) {
 
     private val zoneManager = ZoneManager(context, settings, diagnostics)
@@ -86,6 +87,7 @@ class LocationCoordinator(
     private var directLocationLooper: Looper? = null
     private var pendingZoneEntryJob: Job? = null
     private var pendingZoneEntryId: String? = null
+    private var pendingZoneEntryArmedAtMs: Long = 0L
     private val publishLock = Any()
     private var publishInFlight = false
     private var lastPublishedFixTimeMs = 0L
@@ -127,6 +129,7 @@ class LocationCoordinator(
     fun stop() {
         diagnostics.record("tracking_stop_requested")
         settings.trackingEnabled = false
+        clearPendingZoneEntry()
         zonesSubscriber.stop()
         removeLocationRegistration()
         removeActivityRegistration()
@@ -209,6 +212,8 @@ class LocationCoordinator(
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
+        // Backstop: expire a never-confirmed entry even if no fixes arrive.
+        expirePendingZoneEntryIfDue(clock())
     }
 
     /**
@@ -357,6 +362,8 @@ class LocationCoordinator(
 
     private fun handleFix(fix: LocationFix, now: Long) {
         if (fix.timeMs <= settings.lastKnownTimeMs) return
+        evaluatePendingZoneEntry(fix, now)
+        if (zonePaused) return // the fix confirmed a zone entry; tracking is paused
         if (!controller.isReliableFix(fix)) {
             diagnosticsRecord(
                 "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
@@ -691,6 +698,7 @@ class LocationCoordinator(
         if (zoneEntryHysteresisMs > 0L) {
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
+            pendingZoneEntryArmedAtMs = now
             diagnostics.record(
                 "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
                     "triggering=${triggeringLocation != null}"
@@ -714,7 +722,14 @@ class LocationCoordinator(
      * so it can be confirmed by a later fix; only a missing zone clears it.
      */
     private fun confirmZoneEntryFromFix(zoneId: String, fix: LocationFix?, now: Long): Boolean {
-        if (fix == null || pendingZoneEntryId != zoneId || settings.currentZoneId != null) {
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) {
+            return false
+        }
+        expirePendingZoneEntryIfDue(now)
+        if (pendingZoneEntryId != zoneId) {
+            return false
+        }
+        if (fix == null) {
             return false
         }
         val zone = zoneManager.getZone(zoneId)
@@ -754,17 +769,18 @@ class LocationCoordinator(
                 val fix = location?.toFix()
                 if (fix == null) {
                     diagnostics.record("zone_enter_rejected id=$zoneId reason=no_location")
-                    clearPendingZoneEntry()
+                    // A missing fix does not kill the entry; the bounded window
+                    // or a later fix resolves it.
+                    expirePendingZoneEntryIfDue(clock())
                     return@addOnSuccessListener
                 }
-                if (!confirmZoneEntryFromFix(zoneId, fix, clock())) {
-                    clearPendingZoneEntry()
-                }
+                confirmZoneEntryFromFix(zoneId, fix, clock())
             }
             .addOnFailureListener {
                 if (pendingZoneEntryId != zoneId) return@addOnFailureListener
                 diagnostics.record("zone_enter_rejected id=$zoneId reason=location_failed")
-                clearPendingZoneEntry()
+                // Keep the entry pending; the bounded window or a later fix resolves it.
+                expirePendingZoneEntryIfDue(clock())
             }
     }
 
@@ -773,6 +789,33 @@ class LocationCoordinator(
         pendingZoneEntryJob?.cancel()
         pendingZoneEntryJob = null
         pendingZoneEntryId = null
+        pendingZoneEntryArmedAtMs = 0L
+    }
+
+    /**
+     * Clears the pending entry once the bounded confirmation window has elapsed,
+     * so a never-confirmed entry (e.g. only coarse fixes) does not linger.
+     */
+    private fun expirePendingZoneEntryIfDue(now: Long) {
+        val zoneId = pendingZoneEntryId ?: return
+        if (settings.currentZoneId != null) return
+        if (pendingZoneEntryArmedAtMs > 0L && now - pendingZoneEntryArmedAtMs > zoneEntryWindowMs) {
+            diagnostics.record("zone_enter_expired id=$zoneId")
+            clearPendingZoneEntry()
+        }
+    }
+
+    /**
+     * Re-evaluates the pending zone entry against a fresh fix, so an entry that
+     * could not be confirmed by the triggering location (or the one-shot) is
+     * confirmed as soon as a usable fix arrives within the bounded window.
+     */
+    private fun evaluatePendingZoneEntry(fix: LocationFix, now: Long) {
+        val zoneId = pendingZoneEntryId ?: return
+        if (settings.currentZoneId != null) return
+        expirePendingZoneEntryIfDue(now)
+        if (pendingZoneEntryId != zoneId) return // expired in the call above
+        confirmZoneEntryFromFix(zoneId, fix, now)
     }
 
     /**

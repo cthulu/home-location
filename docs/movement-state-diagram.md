@@ -102,9 +102,15 @@ A fix confirms the entry when it is not stale and its fix point is inside the
 zone radius. Its accuracy is checked against a zone-aware cap — the normal
 publish cap widened to the zone radius — so a coarse-but-plausible fix (for
 example an indoor Wi-Fi fix) can confirm a large zone without waiting for
-perfect GPS. A fix that is merely not usable leaves the entry pending; only a
-missing zone clears it. On confirmation the entry fix is published and
-tracking pauses.
+perfect GPS. On confirmation the entry fix is published and tracking pauses.
+
+A single rejection does not drop the entry. A fix that is merely not usable
+(coarse, stale, or outside the radius) leaves the entry pending, and each
+subsequent location update re-evaluates it, so the entry is confirmed as soon
+as a usable fix arrives. A missing zone clears it immediately. The pending
+entry is bounded by a confirmation window (10 minutes): if no usable fix
+arrives within it, the entry expires rather than lingering. The window is
+checked on each update and on the heartbeat as a backstop.
 
 ### Registration rule
 

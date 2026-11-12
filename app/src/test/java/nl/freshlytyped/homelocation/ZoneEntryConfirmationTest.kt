@@ -121,4 +121,33 @@ class ZoneEntryConfirmationTest {
 
         assertNull(settings.currentZoneId)
     }
+
+    @Test
+    fun `a later good fix confirms an entry whose triggering fix was rejected`() {
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        // 200 m exceeds the zone cap (max(50, 150) = 150 m): rejected, but the
+        // entry is kept pending rather than dropped.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 200f))
+        assertNull(settings.currentZoneId)
+
+        // Within the bounded window, a usable update confirms the entry.
+        clockValue += 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+
+        assertEquals("cgu", settings.currentZoneId)
+    }
+
+    @Test
+    fun `a never-confirmed entry expires after the bounded window`() {
+        persistZone("cgu", 52.0, 5.0, radius = 40)
+        // Rejected (100 m > cap 50 m) and kept pending.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
+        assertNull(settings.currentZoneId)
+
+        // Past the 10-minute window, even a good fix no longer confirms.
+        clockValue += 11 * 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+
+        assertNull(settings.currentZoneId)
+    }
 }
