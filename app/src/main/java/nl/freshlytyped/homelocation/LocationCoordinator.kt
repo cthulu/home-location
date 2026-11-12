@@ -696,14 +696,18 @@ class LocationCoordinator(
             return
         }
         if (zoneEntryHysteresisMs > 0L) {
+            val triggeringFix = triggeringLocation?.toFix()
+            if (triggeringFix != null && isCoarseForZone(zoneId, triggeringFix, now)) {
+                return
+            }
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
             pendingZoneEntryArmedAtMs = now
             diagnostics.record(
                 "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
-                    "triggering=${triggeringLocation != null}"
+                    "triggering=${triggeringFix != null}"
             )
-            if (!confirmZoneEntryFromFix(zoneId, triggeringLocation?.toFix(), now)) {
+            if (!confirmZoneEntryFromFix(zoneId, triggeringFix, now)) {
                 pendingZoneEntryJob = scope.launch {
                     delay(zoneEntryHysteresisMs)
                     confirmZoneEntry(zoneId)
@@ -712,6 +716,28 @@ class LocationCoordinator(
             return
         }
         applyZoneEntered(zoneId, now)
+    }
+
+    /**
+     * True when [fix] is too coarse to trust for [zoneId]. The geofence engine
+     * can fire an ENTER on a fix it cannot reliably place; arming a confirmation
+     * window on such a fix would keep a likely false positive pending. The cap is
+     * zone-aware, so a coarse-but-plausible fix for a large zone still arms. A
+     * null fix is never "coarse"; only a clearly-too-coarse fix skips the arm —
+     * stale or merely-outside fixes arm and are left for [confirmZoneEntryFromFix]
+     * to resolve.
+     */
+    private fun isCoarseForZone(zoneId: String, fix: LocationFix, now: Long): Boolean {
+        val zone = zoneManager.getZone(zoneId) ?: return false
+        val cap = accuracyCapForZone(zone)
+        if (filter.validate(fix, now, settings.maxLocationAgeMs, cap) == RejectReason.BAD_ACCURACY) {
+            diagnostics.record(
+                "zone_enter_pending_ignored id=$zoneId reason=coarse_fix " +
+                    "accuracy=${fix.accuracyMeters} cap=${cap}"
+            )
+            return true
+        }
+        return false
     }
 
     /**

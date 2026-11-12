@@ -125,9 +125,10 @@ class ZoneEntryConfirmationTest {
     @Test
     fun `a later good fix confirms an entry whose triggering fix was rejected`() {
         persistZone("cgu", 52.0, 5.0, radius = 150)
-        // 200 m exceeds the zone cap (max(50, 150) = 150 m): rejected, but the
-        // entry is kept pending rather than dropped.
-        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 200f))
+        settings.maxLocationAgeMs = 10 * 60_000L
+        // Within the cap (10 m) but stale (11 min): the entry arms, but the
+        // triggering fix can't confirm it, so it is kept pending.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f, ageMs = 11 * 60_000L))
         assertNull(settings.currentZoneId)
 
         // Within the bounded window, a usable update confirms the entry.
@@ -139,9 +140,11 @@ class ZoneEntryConfirmationTest {
 
     @Test
     fun `a never-confirmed entry expires after the bounded window`() {
-        persistZone("cgu", 52.0, 5.0, radius = 40)
-        // Rejected (100 m > cap 50 m) and kept pending.
-        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        settings.maxLocationAgeMs = 10 * 60_000L
+        // Within the cap (10 m) but stale (11 min): the entry arms, but the
+        // triggering fix can't confirm it, so it stays pending.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f, ageMs = 11 * 60_000L))
         assertNull(settings.currentZoneId)
 
         // Past the 10-minute window, even a good fix no longer confirms.
@@ -149,5 +152,33 @@ class ZoneEntryConfirmationTest {
         coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
 
         assertNull(settings.currentZoneId)
+    }
+
+    @Test
+    fun `a coarse triggering fix beyond the zone cap is ignored rather than armed`() {
+        persistZone("cgu", 52.0, 5.0, radius = 40)
+        // 100 m exceeds the zone-aware cap (max(50, 40) = 50 m): the entry is
+        // ignored entirely rather than armed.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
+        assertNull(settings.currentZoneId)
+
+        // Within the window, a good fix still does not confirm: the entry was
+        // never armed, so there is nothing pending to confirm (unlike a stale or
+        // outside triggering fix, which would have stayed pending and confirmed).
+        clockValue += 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+
+        assertNull(settings.currentZoneId)
+    }
+
+    @Test
+    fun `a coarse triggering fix within a large zone cap still arms and confirms`() {
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        // 100 m is coarser than the 50 m publish cap but within the zone-aware cap
+        // (max(50, 150) = 150 m): the entry arms and confirms, so a coarse indoor
+        // fix still pauses tracking for a large zone.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
+
+        assertEquals("cgu", settings.currentZoneId)
     }
 }
