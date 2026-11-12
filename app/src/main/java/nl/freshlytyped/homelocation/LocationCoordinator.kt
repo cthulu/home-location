@@ -464,9 +464,9 @@ class LocationCoordinator(
         lastPublishedTimeMs = settings.lastPublishedTimeMs
     )
 
-    private fun publish(fix: LocationFix) {
+    private fun publish(fix: LocationFix, accuracyCap: Float = settings.maxAccuracyMeters) {
         if (roamingPaused) return
-        val invalidReason = validatePublishFix(fix)
+        val invalidReason = validatePublishFix(fix, accuracyCap)
         if (invalidReason != null) {
             diagnosticsRecord("publish rejected reason=${invalidReason.name.lowercase()}")
             return
@@ -479,11 +479,14 @@ class LocationCoordinator(
         publishAttempt(fix)
     }
 
-    private fun validatePublishFix(fix: LocationFix): RejectReason? = filter.validate(
+    private fun validatePublishFix(
+        fix: LocationFix,
+        accuracyCap: Float = settings.maxAccuracyMeters
+    ): RejectReason? = filter.validate(
         fix,
         clock(),
         settings.maxLocationAgeMs,
-        settings.maxAccuracyMeters
+        accuracyCap
     )
 
     private fun storePendingIfNewer(fix: LocationFix) {
@@ -869,12 +872,16 @@ class LocationCoordinator(
         }
     }
 
-    /** Called from [GeofenceReceiver] when the device exits a zone. */
-    fun onZoneExited(zoneId: String) {
+    /**
+     * Called from [GeofenceReceiver] when the device exits a zone.
+     *
+     * [triggeringLocation] is the fix the geofence engine used to decide the
+     * exit. On a valid exit it is published as a best-effort departure point so
+     * Home Assistant sees the device leave the zone promptly.
+     */
+    fun onZoneExited(zoneId: String, triggeringLocation: Location? = null) {
         if (pendingZoneEntryId == zoneId) {
-            pendingZoneEntryJob?.cancel()
-            pendingZoneEntryJob = null
-            pendingZoneEntryId = null
+            clearPendingZoneEntry()
             diagnostics.record("zone_enter_cancelled id=$zoneId reason=exit_before_confirmation")
         }
         if (settings.currentZoneId != zoneId) {
@@ -890,6 +897,27 @@ class LocationCoordinator(
         if (settings.trackingEnabled) {
             ensureRegistered()
         }
+        publishDepartureFix(zoneId, triggeringLocation?.toFix())
+    }
+
+    /**
+     * Publishes the geofence EXIT's triggering location as a best-effort
+     * departure point. Outside the zone a coarse fix still signals departure,
+     * so the zone-aware cap (not the tight 50 m publish cap) is applied.
+     * Failures are non-fatal: normal tracking resumes and publishes the next
+     * good fix.
+     */
+    private fun publishDepartureFix(zoneId: String, fix: LocationFix?) {
+        if (fix == null) return
+        val cap = zoneManager.getZone(zoneId)?.let { accuracyCapForZone(it) }
+            ?: settings.maxAccuracyMeters
+        val reason = filter.validate(fix, clock(), settings.maxLocationAgeMs, cap)
+        if (reason != null) {
+            diagnostics.record("zone_exit_departure_ignored id=$zoneId reason=${reason.name.lowercase()}")
+            return
+        }
+        publish(fix, cap)
+        diagnostics.record("zone_exit_departure_published id=$zoneId accuracy=${fix.accuracyMeters}")
     }
 
     /** Applies a state transition and (re)registers the matching request. */

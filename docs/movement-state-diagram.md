@@ -119,6 +119,17 @@ by a confirmation window (10 minutes): if no usable fix arrives within it, the
 entry expires rather than lingering. The window is checked on each update and on
 the heartbeat as a backstop.
 
+### Zone exit
+
+A geofence EXIT resumes tracking immediately (it is not debounced, so a
+boundary-induced exit recovers promptly). The exit's triggering location — the
+fix the geofence engine used to decide the device left the zone — is published
+as a best-effort departure point, so Home Assistant sees the device move out of
+the zone right away rather than waiting for the first post-exit fix. The
+zone-aware accuracy cap applies, so a coarse fix still registers for a large
+zone. A stale exit (the device is not currently in the zone) is ignored, and an
+exit while a matching entry is still pending cancels that entry.
+
 ### Registration rule
 
 Location and activity registrations are idempotent. A callback must process

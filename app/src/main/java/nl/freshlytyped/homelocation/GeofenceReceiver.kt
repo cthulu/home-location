@@ -66,7 +66,7 @@ class GeofenceReceiver : BroadcastReceiver() {
                         coordinator.onZoneEntered(zoneId, triggeringLocation)
                     }
                     Geofence.GEOFENCE_TRANSITION_EXIT -> {
-                        coordinator.onZoneExited(zoneId)
+                        coordinator.onZoneExited(zoneId, triggeringLocation)
                     }
                 }
             }

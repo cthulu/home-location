@@ -181,4 +181,52 @@ class ZoneEntryConfirmationTest {
 
         assertEquals("cgu", settings.currentZoneId)
     }
+
+    @Test
+    fun `a valid exit publishes the departure fix`() {
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f))
+        assertEquals("cgu", settings.currentZoneId)
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+
+        // ~222 m north of center (outside the 150 m radius), 100 m accuracy —
+        // coarser than the 50 m publish cap but within the zone cap, so the
+        // departure registers.
+        clockValue += 60_000L
+        coordinator.onZoneExited("cgu", fixAt(52.002, 5.0, accuracy = 100f))
+
+        assertNull(settings.currentZoneId)
+        assertEquals(52.002, settings.lastPublishedLat, 1e-9)
+        assertEquals(5.0, settings.lastPublishedLon, 1e-9)
+    }
+
+    @Test
+    fun `a valid exit with no triggering fix does not publish`() {
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f))
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+
+        // No triggering location: the exit applies, but there is nothing to
+        // publish as a departure point.
+        clockValue += 60_000L
+        coordinator.onZoneExited("cgu")
+
+        assertNull(settings.currentZoneId)
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+    }
+
+    @Test
+    fun `a too-coarse departure fix is not published`() {
+        persistZone("cgu", 52.0, 5.0, radius = 40)
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f))
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+
+        // 100 m is coarser than the zone cap (max(50, 40) = 50 m): the departure
+        // is ignored, so the last published point is unchanged.
+        clockValue += 60_000L
+        coordinator.onZoneExited("cgu", fixAt(52.002, 5.0, accuracy = 100f))
+
+        assertNull(settings.currentZoneId)
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+    }
 }
