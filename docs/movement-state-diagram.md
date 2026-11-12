@@ -46,6 +46,8 @@ stateDiagram-v2
       tracking. Enter events are debounced to suppress flapping,
       and geofences also use a dwell delay and an initial ENTER
       trigger so a device booted inside a zone pauses immediately.
+      An ENTER is confirmed against a location fix (see
+      "Zone entry confirmation") before tracking pauses.
     end note
 ```
 
@@ -80,6 +82,29 @@ During a running session, the same limit applies even when activity recognition
 continually reports movement. Activity-only movement evidence is ignored during
 the cooldown after that reset; a location fix crossing the configured distance
 threshold can resume moving mode.
+
+### Zone entry confirmation
+
+A geofence ENTER (or DWELL) does not pause tracking by itself; it starts a
+pending entry that must be confirmed by a location fix. This keeps a coarse
+fix from briefly pausing tracking for a zone the device is not really in.
+
+The confirmation is background-capable and tries fixes in this order:
+
+1. The geofence event's **triggering location**, confirmed immediately. This
+   is the fix the geofence engine already used to decide the transition, so a
+   usable fix pauses tracking without waiting for a background-frozen delay or
+   a fresh one-shot.
+2. If the triggering fix is not usable, a **one-shot** request after the entry
+   hysteresis delay, allowed to answer with a recent cached fix.
+
+A fix confirms the entry when it is not stale and its fix point is inside the
+zone radius. Its accuracy is checked against a zone-aware cap — the normal
+publish cap widened to the zone radius — so a coarse-but-plausible fix (for
+example an indoor Wi-Fi fix) can confirm a large zone without waiting for
+perfect GPS. A fix that is merely not usable leaves the entry pending; only a
+missing zone clears it. On confirmation the entry fix is published and
+tracking pauses.
 
 ### Registration rule
 
