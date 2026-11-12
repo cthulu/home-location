@@ -60,13 +60,19 @@ class LocationCoordinator(
     private val settings: LocationSettings,
     private val permissions: LocationPermissionManager,
     private val publisher: LocationPublisher,
+    /**
+     * Shared with [App] (and every other component) so there is exactly one
+     * writer per log file. Two [DiagnosticLogger] instances writing the same
+     * file would each hold their own lock and prune state and interleave their
+     * read-all/write-back cycles, silently dropping lines.
+     */
+    private val diagnostics: DiagnosticLogger,
     private val requestFactory: LocationRequestFactory = LocationRequestFactory(),
     private val filter: LocationFilter = LocationFilter(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val zoneEntryHysteresisMs: Long = 60_000L
 ) {
 
-    private val diagnostics = DiagnosticLogger(context)
     private val zoneManager = ZoneManager(context, settings, diagnostics)
     private val zonesSubscriber = ZonesSubscriber(settings, zoneManager, diagnostics)
 

@@ -3,6 +3,7 @@ package nl.freshlytyped.homelocation
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -40,5 +41,21 @@ class DiagnosticLoggerTest {
         assertFalse(snapshot.contains("older than 24 hours"))
         assertTrue(snapshot.contains("within 24 hours"))
         assertTrue(snapshot.contains("new event"))
+    }
+
+    @Test
+    fun `a single shared instance survives concurrent writers without losing lines`() {
+        val threads = (0 until 8).map { t ->
+            Thread {
+                repeat(25) { i -> logger.record("concurrent-$t-$i") }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        val snapshot = logger.snapshot()
+        val missing = (0 until 8).flatMap { t -> (0 until 25).map { i -> "concurrent-$t-$i" } }
+            .count { line -> !snapshot.contains(line) }
+        assertEquals("concurrent writes to one instance must not drop lines", 0, missing)
     }
 }

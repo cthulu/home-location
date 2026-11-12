@@ -1,0 +1,3 @@
+model=samsung SM-A528B
+android=14 (34)
+package=nl.freshlytyped.homelocation
