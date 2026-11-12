@@ -89,12 +89,13 @@ A geofence ENTER (or DWELL) does not pause tracking by itself; it starts a
 pending entry that must be confirmed by a location fix. This keeps a coarse
 fix from briefly pausing tracking for a zone the device is not really in.
 
-The arming gate uses the same zone-aware cap. If the event's triggering
-location is coarser than that cap, the entry is ignored rather than armed: the
-geofence engine fired on data it cannot reliably place, so there is no point
-keeping a likely false positive pending. A null triggering fix (the engine
-decided by other means), or one that is merely stale or outside the radius,
-still arms.
+A null triggering fix (the engine decided by other means), or one that is
+merely stale, outside the radius, or too coarse to trust, still arms the entry.
+A triggering fix coarser than the zone-aware cap is not silently discarded:
+the geofence engine decided the device is inside the zone, so the entry is kept
+pending and the coarse trigger is recorded in the arming diagnostics. The
+bounded confirmation window is the backstop: it expires the entry if no usable
+fix arrives.
 
 The confirmation is background-capable and tries fixes in this order:
 

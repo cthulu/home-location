@@ -158,20 +158,37 @@ class ZoneEntryConfirmationTest {
     }
 
     @Test
-    fun `a coarse triggering fix beyond the zone cap is ignored rather than armed`() {
+    fun `a coarse triggering fix beyond the zone cap still arms`() {
         persistZone("cgu", 52.0, 5.0, radius = 40)
-        // 100 m exceeds the zone-aware cap (max(50, 40) = 50 m): the entry is
-        // ignored entirely rather than armed.
+        // 100 m exceeds the zone-aware cap (max(50, 40) = 50 m): the fix cannot
+        // confirm on its own, but the entry is still armed (not discarded), so it
+        // stays pending.
         coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
         assertNull(settings.currentZoneId)
+        assertEquals("cgu", coordinator.testPendingZoneEntryId)
 
-        // Within the window, a good fix still does not confirm: the entry was
-        // never armed, so there is nothing pending to confirm (unlike a stale or
-        // outside triggering fix, which would have stayed pending and confirmed).
+        // Within the window, a usable fix confirms the armed entry.
         clockValue += 60_000L
         coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
+        assertEquals("cgu", settings.currentZoneId)
+    }
+
+    @Test
+    fun `a coarse-triggered entry that never receives a usable fix expires`() {
+        persistZone("cgu", 52.0, 5.0, radius = 40)
+        // 100 m exceeds the zone cap: the entry arms but cannot be confirmed by
+        // this fix.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
+        assertNull(settings.currentZoneId)
+        assertEquals("cgu", coordinator.testPendingZoneEntryId)
+
+        // Past the 10-minute window, the entry expires even though only coarse
+        // (unusable) fixes arrive.
+        clockValue += 11 * 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 100f)))
 
         assertNull(settings.currentZoneId)
+        assertNull(coordinator.testPendingZoneEntryId)
     }
 
     @Test

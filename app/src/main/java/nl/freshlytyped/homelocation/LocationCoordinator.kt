@@ -695,6 +695,12 @@ class LocationCoordinator(
      * transition. When it is usable it confirms the entry immediately, so the
      * confirmation does not depend on a background-frozen hysteresis delay or
      * a fresh one-shot that may return nothing.
+     *
+     * A triggering fix that is too coarse to trust still arms the pending
+     * entry and is reported diagnostically: the geofence engine decided the
+     * device is inside the zone, so the entry is kept (and recorded) rather
+     * than silently discarded. The bounded confirmation window is the
+     * backstop: it expires the entry if no usable fix arrives.
      */
     fun onZoneEntered(zoneId: String, triggeringLocation: Location? = null) {
         val now = clock()
@@ -709,15 +715,14 @@ class LocationCoordinator(
         }
         if (zoneEntryHysteresisMs > 0L) {
             val triggeringFix = triggeringLocation?.toFix()
-            if (triggeringFix != null && isCoarseForZone(zoneId, triggeringFix, now)) {
-                return
-            }
+            val coarse = triggeringFix?.let { isCoarseForZone(zoneId, it, now) } ?: false
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
             pendingZoneEntryArmedAtMs = now
+            val coarseFlag = if (coarse) " coarse_trigger=true" else ""
             diagnostics.record(
                 "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
-                    "triggering=${triggeringFix != null}"
+                    "triggering=${triggeringFix != null}$coarseFlag"
             )
             if (!confirmZoneEntryFromFix(zoneId, triggeringFix, now)) {
                 pendingZoneEntryJob = scope.launch {
@@ -731,25 +736,25 @@ class LocationCoordinator(
     }
 
     /**
-     * True when [fix] is too coarse to trust for [zoneId]. The geofence engine
-     * can fire an ENTER on a fix it cannot reliably place; arming a confirmation
-     * window on such a fix would keep a likely false positive pending. The cap is
-     * zone-aware, so a coarse-but-plausible fix for a large zone still arms. A
-     * null fix is never "coarse"; only a clearly-too-coarse fix skips the arm —
-     * stale or merely-outside fixes arm and are left for [confirmZoneEntryFromFix]
-     * to resolve.
+     * True when [fix] is too coarse to trust for [zoneId]: its accuracy exceeds
+     * the zone-aware cap. The geofence engine can still fire an ENTER on such a
+     * fix, and the entry is armed regardless — but a coarse trigger is a weak
+     * confirmation signal, so it is recorded here to keep device exports
+     * readable. The cap is zone-aware, so a coarse-but-plausible fix for a
+     * large zone is not flagged.
      */
     private fun isCoarseForZone(zoneId: String, fix: LocationFix, now: Long): Boolean {
         val zone = zoneManager.getZone(zoneId) ?: return false
         val cap = accuracyCapForZone(zone)
-        if (filter.validate(fix, now, settings.maxLocationAgeMs, cap) == RejectReason.BAD_ACCURACY) {
+        val coarse =
+            filter.validate(fix, now, settings.maxLocationAgeMs, cap) == RejectReason.BAD_ACCURACY
+        if (coarse) {
             diagnostics.record(
-                "zone_enter_pending_ignored id=$zoneId reason=coarse_fix " +
-                    "accuracy=${fix.accuracyMeters} cap=${cap}"
+                "zone_enter_coarse_trigger id=$zoneId " +
+                    "accuracy=${fix.accuracyMeters} cap=$cap"
             )
-            return true
         }
-        return false
+        return coarse
     }
 
     /**
