@@ -3,13 +3,19 @@
 allow_repo_commands: true
 
 commands:
+  # local.properties is gitignored, so the run worktree has no SDK pointer;
+  # prepare pins the Android SDK for every configured command in the worktree.
+  prepare: "echo \"sdk.dir=/Users/cthulu/Library/Android/sdk\" > local.properties"
   test: "./gradlew testDebugUnitTest"
   lint: "./gradlew lintDebug"
 
 test:
   instructions: |
-    The Gradle unit test command is the authoritative local validation for
-    this repository; do not start emulators or drive the app through adb.
-    If the unit tests pass, the Test step is complete.
+    The Gradle unit test command (./gradlew testDebugUnitTest) is the
+    authoritative local validation for this repository, and the pipeline's
+    prepare step pins the Android SDK for it. Do not start emulators, do not
+    drive the app through adb, and do not stand up mock backends.
+    If the unit tests pass, the Test step is complete; if they fail, report
+    the failing tests and stop.
   evidence:
     store_in_repo: false
