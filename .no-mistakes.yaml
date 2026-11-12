@@ -1,0 +1,15 @@
+# no-mistakes repository configuration.
+# commands.* is read from the pushed branch for this single-developer repo.
+allow_repo_commands: true
+
+commands:
+  test: "./gradlew testDebugUnitTest"
+  lint: "./gradlew lintDebug"
+
+test:
+  instructions: |
+    The Gradle unit test command is the authoritative local validation for
+    this repository; do not start emulators or drive the app through adb.
+    If the unit tests pass, the Test step is complete.
+  evidence:
+    store_in_repo: false
