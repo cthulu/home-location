@@ -2,12 +2,14 @@ package nl.freshlytyped.homelocation
 
 import android.content.Context
 import android.location.Location
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,7 +17,10 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Covers the background-capable zone-entry confirmation: the geofence event's
@@ -96,6 +101,10 @@ class ZoneEntryConfirmationTest {
         coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 100f))
 
         assertEquals("cgu", settings.currentZoneId)
+        // The confirming fix is published with the zone-aware cap, so the
+        // tracker sees the entry even for a coarse fix.
+        assertEquals(52.0, settings.lastPublishedLat, 1e-9)
+        assertEquals(5.0, settings.lastPublishedLon, 1e-9)
     }
 
     @Test
@@ -276,6 +285,33 @@ class ZoneEntryConfirmationTest {
         coordinator.onLocationUpdates(listOf(fixAt(52.0, 5.0, accuracy = 10f)))
 
         assertNull(settings.currentZoneId)
+    }
+
+    @Test
+    fun `a zone list update from a background thread drops the pending entry`() {
+        persistZone("cgu", 52.0, 5.0, radius = 150)
+        settings.maxLocationAgeMs = 10 * 60_000L
+        // Stale triggering fix: the entry arms but stays pending.
+        coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0, accuracy = 10f, ageMs = 11 * 60_000L))
+        assertNull(settings.currentZoneId)
+        assertEquals("cgu", coordinator.testPendingZoneEntryId)
+
+        // The zones stream applies new lists on an IO thread; the drop must
+        // still run on the coordinator's main loop.
+        val done = CountDownLatch(1)
+        Thread {
+            try {
+                coordinator.testZoneManager.updateZones(
+                    listOf(zone("office", latitude = 52.0, longitude = 5.018))
+                )
+            } finally {
+                done.countDown()
+            }
+        }.start()
+        assertTrue("zone list update must complete", done.await(10, TimeUnit.SECONDS))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertNull(coordinator.testPendingZoneEntryId)
     }
 
     @Test

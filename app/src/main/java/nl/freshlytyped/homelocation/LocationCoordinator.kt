@@ -793,7 +793,11 @@ class LocationCoordinator(
             )
             return false
         }
-        publish(fix)
+        // Publish with the same zone-aware cap used for the confirmation check
+        // above: a coarse fix that just confirmed must not be silently dropped
+        // by the tighter normal publish cap, or the tracker would never see the
+        // entry.
+        publish(fix, accuracyCapForZone(zone))
         clearPendingZoneEntry()
         applyZoneEntered(zoneId, now)
         return true
@@ -838,13 +842,21 @@ class LocationCoordinator(
     /**
      * Drops the pending entry when the armed zone has been removed from the
      * persisted zone list, so a pending entry never outlives the zone that
-     * armed it. Called from [ZoneManager.updateZones] when a new list is applied.
+     * armed it.
+     *
+     * [ZoneManager.updateZones] invokes this on its caller's thread (the zones
+     * stream runs on an IO dispatcher), but the pending entry state is confined
+     * to the coordinator's main loop, so the drop is hopped onto [scope] before
+     * touching it. Launched from the main thread (the cache-restore path) it
+     * runs immediately, keeping the drop synchronous there.
      */
     private fun onZonesUpdated(zoneIds: List<String>) {
-        val pendingZoneId = pendingZoneEntryId ?: return
-        if (zoneIds.contains(pendingZoneId)) return
-        clearPendingZoneEntry()
-        diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+        scope.launch {
+            val pendingZoneId = pendingZoneEntryId ?: return@launch
+            if (zoneIds.contains(pendingZoneId)) return@launch
+            clearPendingZoneEntry()
+            diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+        }
     }
 
     /**

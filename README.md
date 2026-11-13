@@ -28,4 +28,4 @@ sbx run --template home-location-android opencode
 
 Run `sbx run` from this repository's directory so Docker Sandboxes makes the repo available as the workspace. The custom Android SDK tools are built for AArch64, so no x86-64 QEMU/binfmt emulation is needed. See [`.sandbox/README.md`](.sandbox/README.md) for image contents and verification commands. Once OpenCode starts, use `./gradlew assembleDebug` or `./gradlew testDebugUnitTest`.
 
-Location functionality is intentionally not implemented yet; the specifications define the next implementation phases.
+The location tracking, zone pausing, and geofencing features are implemented; the specifications record the research and implementation plan for those phases.
