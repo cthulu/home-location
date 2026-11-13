@@ -60,15 +60,31 @@ class LocationCoordinator(
     private val settings: LocationSettings,
     private val permissions: LocationPermissionManager,
     private val publisher: LocationPublisher,
+    /**
+     * Shared with [App] (and every other component) so there is exactly one
+     * writer per log file. Two [DiagnosticLogger] instances writing the same
+     * file would each hold their own lock and prune state and interleave their
+     * read-all/write-back cycles, silently dropping lines.
+     */
+    private val diagnostics: DiagnosticLogger,
     private val requestFactory: LocationRequestFactory = LocationRequestFactory(),
     private val filter: LocationFilter = LocationFilter(),
     private val clock: () -> Long = { System.currentTimeMillis() },
-    private val zoneEntryHysteresisMs: Long = 60_000L
+    private val zoneEntryHysteresisMs: Long = 60_000L,
+    private val zoneEntryWindowMs: Long = 10 * 60_000L
 ) {
 
-    private val diagnostics = DiagnosticLogger(context)
-    private val zoneManager = ZoneManager(context, settings, diagnostics)
+    private val zoneManager = ZoneManager(
+        context, settings, diagnostics,
+        onZonesUpdated = ::onZonesUpdated
+    )
     private val zonesSubscriber = ZonesSubscriber(settings, zoneManager, diagnostics)
+
+    /** Exposed for tests in the same package to drive the zone-update boundary. */
+    internal val testZoneManager: ZoneManager get() = zoneManager
+
+    /** Exposed for tests to observe the pending zone entry id. */
+    internal val testPendingZoneEntryId: String? get() = pendingZoneEntryId
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
@@ -80,6 +96,7 @@ class LocationCoordinator(
     private var directLocationLooper: Looper? = null
     private var pendingZoneEntryJob: Job? = null
     private var pendingZoneEntryId: String? = null
+    private var pendingZoneEntryArmedAtMs: Long = 0L
     private val publishLock = Any()
     private var publishInFlight = false
     private var lastPublishedFixTimeMs = 0L
@@ -121,6 +138,7 @@ class LocationCoordinator(
     fun stop() {
         diagnostics.record("tracking_stop_requested")
         settings.trackingEnabled = false
+        clearPendingZoneEntry()
         zonesSubscriber.stop()
         removeLocationRegistration()
         removeActivityRegistration()
@@ -203,6 +221,8 @@ class LocationCoordinator(
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
+        // Backstop: expire a never-confirmed entry even if no fixes arrive.
+        expirePendingZoneEntryIfDue(clock())
     }
 
     /**
@@ -287,7 +307,8 @@ class LocationCoordinator(
     @SuppressLint("MissingPermission")
     private fun oneShotLocationRequest(
         durationMs: Long,
-        forceBalanced: Boolean = false
+        forceBalanced: Boolean = false,
+        maxUpdateAgeMillis: Long = 0L
     ): Task<Location> {
         if (!hasLocationPermission()) {
             Log.w(TAG, "Location request skipped: no location permission")
@@ -302,7 +323,7 @@ class LocationCoordinator(
         }
         val request = CurrentLocationRequest.Builder()
             .setPriority(priority)
-            .setMaxUpdateAgeMillis(0L)
+            .setMaxUpdateAgeMillis(maxUpdateAgeMillis)
             .setDurationMillis(durationMs)
             .build()
         val cancellation = CancellationTokenSource()
@@ -350,6 +371,8 @@ class LocationCoordinator(
 
     private fun handleFix(fix: LocationFix, now: Long) {
         if (fix.timeMs <= settings.lastKnownTimeMs) return
+        evaluatePendingZoneEntry(fix, now)
+        if (zonePaused) return // the fix confirmed a zone entry; tracking is paused
         if (!controller.isReliableFix(fix)) {
             diagnosticsRecord(
                 "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
@@ -450,9 +473,9 @@ class LocationCoordinator(
         lastPublishedTimeMs = settings.lastPublishedTimeMs
     )
 
-    private fun publish(fix: LocationFix) {
+    private fun publish(fix: LocationFix, accuracyCap: Float = settings.maxAccuracyMeters) {
         if (roamingPaused) return
-        val invalidReason = validatePublishFix(fix)
+        val invalidReason = validatePublishFix(fix, accuracyCap)
         if (invalidReason != null) {
             diagnosticsRecord("publish rejected reason=${invalidReason.name.lowercase()}")
             return
@@ -465,11 +488,14 @@ class LocationCoordinator(
         publishAttempt(fix)
     }
 
-    private fun validatePublishFix(fix: LocationFix): RejectReason? = filter.validate(
+    private fun validatePublishFix(
+        fix: LocationFix,
+        accuracyCap: Float = settings.maxAccuracyMeters
+    ): RejectReason? = filter.validate(
         fix,
         clock(),
         settings.maxLocationAgeMs,
-        settings.maxAccuracyMeters
+        accuracyCap
     )
 
     private fun storePendingIfNewer(fix: LocationFix) {
@@ -662,71 +688,210 @@ class LocationCoordinator(
         }
     }
 
-    /** Called from [GeofenceReceiver] when the device enters a zone. */
-    fun onZoneEntered(zoneId: String) {
+    /**
+     * Called from [GeofenceReceiver] when the device enters a zone.
+     *
+     * [triggeringLocation] is the fix the geofence engine used to decide the
+     * transition. When it is usable it confirms the entry immediately, so the
+     * confirmation does not depend on a background-frozen hysteresis delay or
+     * a fresh one-shot that may return nothing.
+     *
+     * A triggering fix that is too coarse to trust still arms the pending
+     * entry and is reported diagnostically: the geofence engine decided the
+     * device is inside the zone, so the entry is kept (and recorded) rather
+     * than silently discarded. The bounded confirmation window is the
+     * backstop: it expires the entry if no usable fix arrives.
+     */
+    fun onZoneEntered(zoneId: String, triggeringLocation: Location? = null) {
         val now = clock()
+        if (settings.currentZoneId == zoneId) return
         val lastTransition = settings.lastZoneTransitionMs
-        val debounceMs = settings.geofenceDebounceMs
-        val currentZoneId = settings.currentZoneId
-        if (currentZoneId == zoneId) return
-        if (currentZoneId != null && lastTransition > 0L && now - lastTransition < debounceMs) {
+        if (settings.currentZoneId != null && lastTransition > 0L &&
+            now - lastTransition < settings.geofenceDebounceMs
+        ) {
             diagnostics.record("zone_entered id=$zoneId debounce_ignored=true")
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
         }
         if (zoneEntryHysteresisMs > 0L) {
+            val triggeringFix = triggeringLocation?.toFix()
+            val coarse = triggeringFix?.let { isCoarseForZone(zoneId, it, now) } ?: false
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
-            diagnostics.record("zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs")
-            pendingZoneEntryJob = scope.launch {
-                delay(zoneEntryHysteresisMs)
-                confirmZoneEntry(zoneId)
+            pendingZoneEntryArmedAtMs = now
+            val coarseFlag = if (coarse) " coarse_trigger=true" else ""
+            diagnostics.record(
+                "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
+                    "triggering=${triggeringFix != null}$coarseFlag"
+            )
+            if (!confirmZoneEntryFromFix(zoneId, triggeringFix, now)) {
+                pendingZoneEntryJob = scope.launch {
+                    delay(zoneEntryHysteresisMs)
+                    confirmZoneEntry(zoneId)
+                }
             }
             return
         }
         applyZoneEntered(zoneId, now)
     }
 
-    private fun confirmZoneEntry(zoneId: String) {
-        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) return
+    /**
+     * True when [fix] is too coarse to trust for [zoneId]: its accuracy exceeds
+     * the zone-aware cap. The geofence engine can still fire an ENTER on such a
+     * fix, and the entry is armed regardless — but a coarse trigger is a weak
+     * confirmation signal, so it is recorded here to keep device exports
+     * readable. The cap is zone-aware, so a coarse-but-plausible fix for a
+     * large zone is not flagged.
+     */
+    private fun isCoarseForZone(zoneId: String, fix: LocationFix, now: Long): Boolean {
+        val zone = zoneManager.getZone(zoneId) ?: return false
+        val cap = accuracyCapForZone(zone)
+        val coarse =
+            filter.validate(fix, now, settings.maxLocationAgeMs, cap) == RejectReason.BAD_ACCURACY
+        if (coarse) {
+            diagnostics.record(
+                "zone_enter_coarse_trigger id=$zoneId " +
+                    "accuracy=${fix.accuracyMeters} cap=$cap"
+            )
+        }
+        return coarse
+    }
+
+    /**
+     * Applies the pending entry for [zoneId] when [fix] is usable for it.
+     *
+     * Returns true when the entry was applied. A fix that is merely not usable
+     * (coarse, stale, or outside the radius) leaves the pending entry in place
+     * so it can be confirmed by a later fix; only a missing zone clears it.
+     */
+    private fun confirmZoneEntryFromFix(zoneId: String, fix: LocationFix?, now: Long): Boolean {
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) {
+            return false
+        }
+        expirePendingZoneEntryIfDue(now)
+        if (pendingZoneEntryId != zoneId) {
+            return false
+        }
+        if (fix == null) {
+            return false
+        }
         val zone = zoneManager.getZone(zoneId)
         if (zone == null) {
             diagnostics.record("zone_enter_rejected id=$zoneId reason=zone_not_found")
-            pendingZoneEntryId = null
-            return
+            clearPendingZoneEntry()
+            return false
         }
-        oneShotLocationRequest(30_000L, forceBalanced = true)
+        val reason = filter.validate(fix, now, settings.maxLocationAgeMs, accuracyCapForZone(zone))
+        if (reason != null) {
+            diagnostics.record("zone_enter_rejected id=$zoneId reason=${reason.name.lowercase()}")
+            return false
+        }
+        val distance = GeoMath.distanceMeters(fix.latitude, fix.longitude, zone.latitude, zone.longitude)
+        if (distance > zone.radius) {
+            diagnostics.record(
+                "zone_enter_rejected id=$zoneId reason=outside distanceMeters=${"%.0f".format(distance)}"
+            )
+            return false
+        }
+        // Publish with the same zone-aware cap used for the confirmation check
+        // above: a coarse fix that just confirmed must not be silently dropped
+        // by the tighter normal publish cap, or the tracker would never see the
+        // entry.
+        publish(fix, accuracyCapForZone(zone))
+        clearPendingZoneEntry()
+        applyZoneEntered(zoneId, now)
+        return true
+    }
+
+    /**
+     * Hysteresis fallback: after [zoneEntryHysteresisMs] ask for one fresh fix
+     * and confirm from it. The relaxed [maxUpdateAgeMillis] lets the provider
+     * answer with a recent cached fix instead of null when no new fix exists.
+     */
+    private fun confirmZoneEntry(zoneId: String) {
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) return
+        oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_CONFIRM_MAX_AGE_MS)
             .addOnSuccessListener { location ->
                 if (pendingZoneEntryId != zoneId) return@addOnSuccessListener
-                pendingZoneEntryId = null
-                if (location == null) {
+                val fix = location?.toFix()
+                if (fix == null) {
                     diagnostics.record("zone_enter_rejected id=$zoneId reason=no_location")
+                    // A missing fix does not kill the entry; the bounded window
+                    // or a later fix resolves it.
+                    expirePendingZoneEntryIfDue(clock())
                     return@addOnSuccessListener
                 }
-                val fix = location.toFix()
-                val invalidReason = validatePublishFix(fix)
-                if (invalidReason != null) {
-                    diagnostics.record("zone_enter_rejected id=$zoneId reason=${invalidReason.name.lowercase()}")
-                    return@addOnSuccessListener
-                }
-                val distance = GeoMath.distanceMeters(
-                    fix.latitude,
-                    fix.longitude,
-                    zone.latitude,
-                    zone.longitude
-                )
-                if (distance <= zone.radius) {
-                    publish(fix)
-                    applyZoneEntered(zoneId, clock())
-                } else {
-                    diagnostics.record("zone_enter_rejected id=$zoneId reason=outside distanceMeters=$distance")
-                }
+                confirmZoneEntryFromFix(zoneId, fix, clock())
             }
             .addOnFailureListener {
-                pendingZoneEntryId = null
+                if (pendingZoneEntryId != zoneId) return@addOnFailureListener
                 diagnostics.record("zone_enter_rejected id=$zoneId reason=location_failed")
+                // Keep the entry pending; the bounded window or a later fix resolves it.
+                expirePendingZoneEntryIfDue(clock())
             }
     }
+
+    /** Cancels the confirmation job and drops the pending entry. */
+    private fun clearPendingZoneEntry() {
+        pendingZoneEntryJob?.cancel()
+        pendingZoneEntryJob = null
+        pendingZoneEntryId = null
+        pendingZoneEntryArmedAtMs = 0L
+    }
+
+    /**
+     * Drops the pending entry when the armed zone has been removed from the
+     * persisted zone list, so a pending entry never outlives the zone that
+     * armed it.
+     *
+     * [ZoneManager.updateZones] invokes this on its caller's thread (the zones
+     * stream runs on an IO dispatcher), but the pending entry state is confined
+     * to the coordinator's main loop, so the drop is hopped onto [scope] before
+     * touching it. Launched from the main thread (the cache-restore path) it
+     * runs immediately, keeping the drop synchronous there.
+     */
+    private fun onZonesUpdated(zoneIds: List<String>) {
+        scope.launch {
+            val pendingZoneId = pendingZoneEntryId ?: return@launch
+            if (zoneIds.contains(pendingZoneId)) return@launch
+            clearPendingZoneEntry()
+            diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+        }
+    }
+
+    /**
+     * Clears the pending entry once the bounded confirmation window has elapsed,
+     * so a never-confirmed entry (e.g. only coarse fixes) does not linger.
+     */
+    private fun expirePendingZoneEntryIfDue(now: Long) {
+        val zoneId = pendingZoneEntryId ?: return
+        if (settings.currentZoneId != null) return
+        if (pendingZoneEntryArmedAtMs > 0L && now - pendingZoneEntryArmedAtMs > zoneEntryWindowMs) {
+            diagnostics.record("zone_enter_expired id=$zoneId")
+            clearPendingZoneEntry()
+        }
+    }
+
+    /**
+     * Re-evaluates the pending zone entry against a fresh fix, so an entry that
+     * could not be confirmed by the triggering location (or the one-shot) is
+     * confirmed as soon as a usable fix arrives within the bounded window.
+     */
+    private fun evaluatePendingZoneEntry(fix: LocationFix, now: Long) {
+        val zoneId = pendingZoneEntryId ?: return
+        if (settings.currentZoneId != null) return
+        expirePendingZoneEntryIfDue(now)
+        if (pendingZoneEntryId != zoneId) return // expired in the call above
+        confirmZoneEntryFromFix(zoneId, fix, now)
+    }
+
+    /**
+     * Accuracy cap for confirming a zone entry: the normal publish cap widened
+     * to the zone radius, so a coarse-but-plausible fix (e.g. an indoor Wi-Fi
+     * fix) can confirm a large zone without waiting for perfect GPS.
+     */
+    private fun accuracyCapForZone(zone: Zone): Float =
+        maxOf(settings.maxAccuracyMeters, zone.radius.toFloat())
 
     private fun applyZoneEntered(zoneId: String, now: Long) {
         settings.currentZoneId = zoneId
@@ -745,12 +910,16 @@ class LocationCoordinator(
         }
     }
 
-    /** Called from [GeofenceReceiver] when the device exits a zone. */
-    fun onZoneExited(zoneId: String) {
+    /**
+     * Called from [GeofenceReceiver] when the device exits a zone.
+     *
+     * [triggeringLocation] is the fix the geofence engine used to decide the
+     * exit. On a valid exit it is published as a best-effort departure point so
+     * Home Assistant sees the device leave the zone promptly.
+     */
+    fun onZoneExited(zoneId: String, triggeringLocation: Location? = null) {
         if (pendingZoneEntryId == zoneId) {
-            pendingZoneEntryJob?.cancel()
-            pendingZoneEntryJob = null
-            pendingZoneEntryId = null
+            clearPendingZoneEntry()
             diagnostics.record("zone_enter_cancelled id=$zoneId reason=exit_before_confirmation")
         }
         if (settings.currentZoneId != zoneId) {
@@ -766,6 +935,27 @@ class LocationCoordinator(
         if (settings.trackingEnabled) {
             ensureRegistered()
         }
+        publishDepartureFix(zoneId, triggeringLocation?.toFix())
+    }
+
+    /**
+     * Publishes the geofence EXIT's triggering location as a best-effort
+     * departure point. Outside the zone a coarse fix still signals departure,
+     * so the zone-aware cap (not the tight 50 m publish cap) is applied.
+     * Failures are non-fatal: normal tracking resumes and publishes the next
+     * good fix.
+     */
+    private fun publishDepartureFix(zoneId: String, fix: LocationFix?) {
+        if (fix == null) return
+        val cap = zoneManager.getZone(zoneId)?.let { accuracyCapForZone(it) }
+            ?: settings.maxAccuracyMeters
+        val reason = filter.validate(fix, clock(), settings.maxLocationAgeMs, cap)
+        if (reason != null) {
+            diagnostics.record("zone_exit_departure_ignored id=$zoneId reason=${reason.name.lowercase()}")
+            return
+        }
+        publish(fix, cap)
+        diagnostics.record("zone_exit_departure_published id=$zoneId accuracy=${fix.accuracyMeters}")
     }
 
     /** Applies a state transition and (re)registers the matching request. */
@@ -1134,6 +1324,9 @@ class LocationCoordinator(
         private const val MAX_HIGH_ACCURACY_DURATION_MS = 15 * 60_000L
         private const val ACTIVITY_COOLDOWN_MS = 15 * 60_000L
         private const val MIN_BURST_ALARM_DELAY_MS = 60_000L
+
+        /** How stale a one-shot fix may be when confirming a zone entry. */
+        private const val ZONE_CONFIRM_MAX_AGE_MS = 60_000L
 
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2

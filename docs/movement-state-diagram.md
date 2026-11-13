@@ -46,6 +46,8 @@ stateDiagram-v2
       tracking. Enter events are debounced to suppress flapping,
       and geofences also use a dwell delay and an initial ENTER
       trigger so a device booted inside a zone pauses immediately.
+      An ENTER is confirmed against a location fix (see
+      "Zone entry confirmation") before tracking pauses.
     end note
 ```
 
@@ -80,6 +82,56 @@ During a running session, the same limit applies even when activity recognition
 continually reports movement. Activity-only movement evidence is ignored during
 the cooldown after that reset; a location fix crossing the configured distance
 threshold can resume moving mode.
+
+### Zone entry confirmation
+
+A geofence ENTER (or DWELL) does not pause tracking by itself; it starts a
+pending entry that must be confirmed by a location fix. This keeps a coarse
+fix from briefly pausing tracking for a zone the device is not really in.
+
+A null triggering fix (the engine decided by other means), or one that is
+merely stale, outside the radius, or too coarse to trust, still arms the entry.
+A triggering fix coarser than the zone-aware cap is not silently discarded:
+the geofence engine decided the device is inside the zone, so the entry is kept
+pending and the coarse trigger is recorded in the arming diagnostics. The
+bounded confirmation window is the backstop: it expires the entry if no usable
+fix arrives.
+
+The confirmation is background-capable and tries fixes in this order:
+
+1. The geofence event's **triggering location**, confirmed immediately. This
+   is the fix the geofence engine already used to decide the transition, so a
+   usable fix pauses tracking without waiting for a background-frozen delay or
+   a fresh one-shot.
+2. If the triggering fix is not usable, a **one-shot** request after the entry
+   hysteresis delay, allowed to answer with a recent cached fix.
+
+A fix confirms the entry when it is not stale and its fix point is inside the
+zone radius. Its accuracy is checked against a zone-aware cap — the normal
+publish cap widened to the zone radius — so a coarse-but-plausible fix (for
+example an indoor Wi-Fi fix) can confirm a large zone without waiting for
+perfect GPS. On confirmation the entry fix is published and tracking pauses.
+
+A single rejection does not drop the entry. A fix that is merely not usable
+(stale, or outside the radius) leaves the entry pending, and each subsequent
+location update re-evaluates it, so the entry is confirmed as soon as a usable
+fix arrives. A missing zone clears it immediately. The pending entry is bounded
+by a confirmation window (10 minutes): if no usable fix arrives within it, the
+entry expires rather than lingering. The window is checked on each update and on
+the heartbeat as a backstop. The pending entry also tracks the persisted zone
+list: if a new zone list no longer contains the armed zone, the entry is dropped
+immediately rather than lingering until the window expires.
+
+### Zone exit
+
+A geofence EXIT resumes tracking immediately (it is not debounced, so a
+boundary-induced exit recovers promptly). The exit's triggering location — the
+fix the geofence engine used to decide the device left the zone — is published
+as a best-effort departure point, so Home Assistant sees the device move out of
+the zone right away rather than waiting for the first post-exit fix. The
+zone-aware accuracy cap applies, so a coarse fix still registers for a large
+zone. A stale exit (the device is not currently in the zone) is ignored, and an
+exit while a matching entry is still pending cancels that entry.
 
 ### Registration rule
 

@@ -21,7 +21,8 @@ class App : Application() {
             context = this,
             settings = locationSettings,
             permissions = LocationPermissionManager(this),
-            publisher = LocationPublisher(locationSettings)
+            publisher = LocationPublisher(locationSettings),
+            diagnostics = diagnostics
         )
     }
 }

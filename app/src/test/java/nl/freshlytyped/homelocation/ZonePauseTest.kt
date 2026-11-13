@@ -41,6 +41,7 @@ class ZonePauseTest {
             settings = settings,
             permissions = permissions,
             publisher = publisher,
+            diagnostics = DiagnosticLogger(context),
             clock = { clockValue },
             zoneEntryHysteresisMs = 0L
         )
