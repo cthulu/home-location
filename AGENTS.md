@@ -23,6 +23,11 @@ Home Location is an Android app that:
 - Depending on the type of work, prefix commit with: 'feat' (for feature), 'fix' (for fixes), 'other' for other type of work
 - Any change to movement detection or tracking state-transition logic must update `docs/movement-state-diagram.md` in the same change.
 
+# Pushes and publishing
+- Push branches directly to `origin` (GitHub). Never push to the `no-mistakes` remote.
+- Do not run the no-mistakes pipeline (`no-mistakes`, `no-mistakes axi run`) unless the user explicitly asks for validation.
+- The user merges to `main` directly when they want work delivered.
+
 # Error handling and logging
 - Handle and test error handling in case of connection errors
 - Use standard logging mechanisms to log errors
