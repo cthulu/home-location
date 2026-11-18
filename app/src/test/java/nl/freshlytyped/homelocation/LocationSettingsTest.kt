@@ -99,4 +99,23 @@ class LocationSettingsTest {
         assertEquals(0L, settings.lastMovementEvidenceTimeMs)
         assertEquals(0f, settings.lastPublishedAccuracyMeters)
     }
+
+    @Test
+    fun `pending publish keeps its accuracy cap`() {
+        val fix = LocationFix(52.0, 5.0, 120f, 1_000L)
+
+        settings.pendingPublish = PendingPublish(fix, 150f)
+
+        assertEquals(PendingPublish(fix, 150f), settings.pendingPublish)
+    }
+
+    @Test
+    fun `a pending fix saved without a cap falls back to the publish cap`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("location_settings", Context.MODE_PRIVATE).edit()
+            .putString("pending_location", """{"latitude":52.0,"longitude":5.0,"accuracy":12.0,"time":1000}""")
+            .commit()
+
+        assertEquals(settings.maxAccuracyMeters, settings.pendingPublish?.accuracyCapMeters)
+    }
 }

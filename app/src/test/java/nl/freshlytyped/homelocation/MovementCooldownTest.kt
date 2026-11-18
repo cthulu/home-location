@@ -41,7 +41,7 @@ class MovementCooldownTest {
         whenever(permissions.trackingAllowed()).thenReturn(true)
         whenever(permissions.fineGranted()).thenReturn(true)
         val publisher = mock<LocationPublisher>()
-        runBlocking { whenever(publisher.publish(any())).thenReturn(Result.success(Unit)) }
+        runBlocking { whenever(publisher.publish(any(), any())).thenReturn(Result.success(Unit)) }
         coordinator = LocationCoordinator(
             context = context,
             settings = settings,

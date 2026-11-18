@@ -62,10 +62,15 @@ class LocationPublisher(
 
     /**
      * Publishes the fix, retrying transient network failures with bounded
-     * backoff. Never logs coordinates or credentials.
+     * backoff. [accuracyCap] is the cap the caller accepted the fix under; zone
+     * entry and exit fixes use a zone-aware cap wider than the default.
+     * Never logs coordinates or credentials.
      */
-    suspend fun publish(fix: LocationFix): Result<Unit> = withContext(Dispatchers.IO) {
-        validateFix(fix)?.let { return@withContext Result.failure(it) }
+    suspend fun publish(
+        fix: LocationFix,
+        accuracyCap: Float = settings.maxAccuracyMeters
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        validateFix(fix, accuracyCap)?.let { return@withContext Result.failure(it) }
 
         val publishKey = settings.publishKey
         val subscribeKey = settings.subscribeKey
@@ -76,7 +81,7 @@ class LocationPublisher(
         val payload = LocationPayload.build(fix, settings.deviceName)
         var lastFailure: Throwable? = null
         for (attempt in 1..MAX_ATTEMPTS) {
-            validateFix(fix)?.let { return@withContext Result.failure(it) }
+            validateFix(fix, accuracyCap)?.let { return@withContext Result.failure(it) }
             val attemptResult = runCatching {
                 publishOnce(payload, publishKey, subscribeKey, settings.apiKey, settings.channel)
             }
@@ -93,12 +98,12 @@ class LocationPublisher(
         Result.failure(lastFailure ?: PublishException(PublishFailureCategory.SERVER))
     }
 
-    private fun validateFix(fix: LocationFix): PublishException? {
+    private fun validateFix(fix: LocationFix, accuracyCap: Float): PublishException? {
         val reason = LocationFilter().validate(
             fix,
             clock(),
             settings.maxLocationAgeMs,
-            settings.maxAccuracyMeters
+            accuracyCap
         ) ?: return null
         val category = if (reason == RejectReason.STALE) {
             PublishFailureCategory.STALE

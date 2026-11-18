@@ -181,26 +181,30 @@ class LocationSettings(context: Context) {
         get() = prefs.getFloat(KEY_LAST_PUBLISHED_ACCURACY, 0f)
         set(value) = prefs.edit().putFloat(KEY_LAST_PUBLISHED_ACCURACY, value).apply()
 
-    var pendingLocation: LocationFix?
+    /** Fix awaiting publish; entries saved before the cap existed fall back to [maxAccuracyMeters]. */
+    var pendingPublish: PendingPublish?
         get() = prefs.getString(KEY_PENDING_LOCATION, null)?.let { raw ->
             runCatching {
                 JSONObject(raw).let {
-                    LocationFix(
+                    val fix = LocationFix(
                         it.getDouble("latitude"),
                         it.getDouble("longitude"),
                         it.getDouble("accuracy").toFloat(),
                         it.getLong("time")
                     )
+                    val cap = it.optDouble("accuracyCap", maxAccuracyMeters.toDouble()).toFloat()
+                    PendingPublish(fix, cap)
                 }
             }.getOrNull()
         }
         set(value) {
             val raw = value?.let {
                 JSONObject().apply {
-                    put("latitude", it.latitude)
-                    put("longitude", it.longitude)
-                    put("accuracy", it.accuracyMeters)
-                    put("time", it.timeMs)
+                    put("latitude", it.fix.latitude)
+                    put("longitude", it.fix.longitude)
+                    put("accuracy", it.fix.accuracyMeters)
+                    put("time", it.fix.timeMs)
+                    put("accuracyCap", it.accuracyCapMeters)
                 }.toString()
             }
             prefs.edit().putString(KEY_PENDING_LOCATION, raw).apply()

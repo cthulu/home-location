@@ -480,8 +480,8 @@ class LocationCoordinator(
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
         }
-        storePendingIfNewer(fix)
-        publishAttempt(fix)
+        storePendingIfNewer(fix, accuracyCap)
+        publishAttempt(fix, accuracyCap)
     }
 
     private fun validatePublishFix(
@@ -494,20 +494,20 @@ class LocationCoordinator(
         accuracyCap
     )
 
-    private fun storePendingIfNewer(fix: LocationFix) {
-        val pending = settings.pendingLocation
-        if (pending == null || fix.timeMs >= pending.timeMs) {
-            settings.pendingLocation = fix
+    private fun storePendingIfNewer(fix: LocationFix, accuracyCap: Float) {
+        val pending = settings.pendingPublish
+        if (pending == null || fix.timeMs >= pending.fix.timeMs) {
+            settings.pendingPublish = PendingPublish(fix, accuracyCap)
         }
     }
 
-    private fun publishAttempt(fix: LocationFix) {
+    private fun publishAttempt(fix: LocationFix, accuracyCap: Float) {
         // Serialized via publishLock: a second fix queues as pending instead of
         // racing the in-flight publish (out-of-order completion would corrupt
         // the last-published baseline).
         val start = synchronized(publishLock) {
             if (publishInFlight) {
-                storePendingIfNewer(fix)
+                storePendingIfNewer(fix, accuracyCap)
                 false
             } else {
                 publishInFlight = true
@@ -517,21 +517,21 @@ class LocationCoordinator(
         if (!start) return
         scope.launch {
             try {
-                publisher.publish(fix)
+                publisher.publish(fix, accuracyCap)
                     .onSuccess {
                         markPublished(fix)
                         diagnosticsRecord("publish success state=${settings.movementState}")
                         Log.i(TAG, "Location published (state=${settings.movementState})")
                     }
                     .onFailure {
-                        val invalidReason = validatePublishFix(fix)
+                        val invalidReason = validatePublishFix(fix, accuracyCap)
                         val category = PublishFailureMapper.categoryFor(it)
                         if (invalidReason != null || isLocationRejected(category)) {
                             clearPendingIfMatches(fix)
                             val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
                             diagnosticsRecord("publish rejected reason=$reason")
                         } else {
-                            storePendingIfNewer(fix)
+                            storePendingIfNewer(fix, accuracyCap)
                             diagnosticsRecord("publish failure category=$category")
                             Log.w(TAG, "Publish failed: $category")
                         }
@@ -545,7 +545,7 @@ class LocationCoordinator(
     private fun finishPublish() {
         val next = synchronized(publishLock) {
             publishInFlight = false
-            settings.pendingLocation
+            settings.pendingPublish
         }
         if (next != null) retryPendingPublish()
     }
@@ -561,12 +561,11 @@ class LocationCoordinator(
             }
         }
         if (!start) return
-        val pending = settings.pendingLocation
-        if (pending == null) {
+        val (pending, accuracyCap) = settings.pendingPublish ?: run {
             synchronized(publishLock) { publishInFlight = false }
             return
         }
-        val invalidReason = validatePublishFix(pending)
+        val invalidReason = validatePublishFix(pending, accuracyCap)
         if (invalidReason != null) {
             clearPendingIfMatches(pending)
             diagnosticsRecord("pending_publish discarded reason=${invalidReason.name.lowercase()}")
@@ -575,13 +574,13 @@ class LocationCoordinator(
         }
         scope.launch {
             try {
-                publisher.publish(pending)
+                publisher.publish(pending, accuracyCap)
                     .onSuccess {
                         markPublished(pending)
                         diagnosticsRecord("pending_publish success")
                     }
                     .onFailure {
-                        val reason = validatePublishFix(pending)
+                        val reason = validatePublishFix(pending, accuracyCap)
                         val category = PublishFailureMapper.categoryFor(it)
                         if (reason != null || isLocationRejected(category)) {
                             clearPendingIfMatches(pending)
@@ -598,8 +597,8 @@ class LocationCoordinator(
     }
 
     private fun clearPendingIfMatches(fix: LocationFix) {
-        if (settings.pendingLocation?.timeMs == fix.timeMs) {
-            settings.pendingLocation = null
+        if (settings.pendingPublish?.fix?.timeMs == fix.timeMs) {
+            settings.pendingPublish = null
         }
     }
 
@@ -608,9 +607,7 @@ class LocationCoordinator(
             category == PublishFailureCategory.INVALID_LOCATION
 
     private fun markPublished(fix: LocationFix) {
-        if (settings.pendingLocation?.timeMs == fix.timeMs) {
-            settings.pendingLocation = null
-        }
+        clearPendingIfMatches(fix)
         synchronized(publishLock) {
             // An older fix must never overwrite the baseline of a newer one.
             if (fix.timeMs < lastPublishedFixTimeMs) return

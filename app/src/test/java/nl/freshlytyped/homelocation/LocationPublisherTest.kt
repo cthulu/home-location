@@ -201,4 +201,25 @@ class LocationPublisherTest {
         assertEquals(PublishFailureCategory.OFFLINE, PublishFailureMapper.categoryFor(exception!!))
         assertEquals(3, attempts)
     }
+
+    @Test
+    fun `a fix coarser than the default cap is rejected without a request`() = runTest {
+        val result = publisher.publish(fix().copy(accuracyMeters = 120f))
+
+        assertEquals(
+            PublishFailureCategory.INVALID_LOCATION,
+            (result.exceptionOrNull() as PublishException).category
+        )
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a caller-widened cap publishes a coarse zone fix`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        val result = publisher.publish(fix().copy(accuracyMeters = 120f), accuracyCap = 150f)
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, server.requestCount)
+    }
 }
