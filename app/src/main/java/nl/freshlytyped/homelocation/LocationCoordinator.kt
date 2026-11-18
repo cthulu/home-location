@@ -71,7 +71,10 @@ class LocationCoordinator(
     private val filter: LocationFilter = LocationFilter(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val zoneEntryHysteresisMs: Long = 60_000L,
-    private val zoneEntryWindowMs: Long = 10 * 60_000L
+    private val zoneEntryWindowMs: Long = 10 * 60_000L,
+    private val currentLocation: (CurrentLocationRequest) -> Task<Location> = {
+        fusedCurrentLocation(context, it)
+    }
 ) {
 
     private val zoneManager = ZoneManager(
@@ -223,6 +226,50 @@ class LocationCoordinator(
         ensureRegistered()
         // Backstop: expire a never-confirmed entry even if no fixes arrive.
         expirePendingZoneEntryIfDue(clock())
+        verifyCurrentZone()
+    }
+
+    /**
+     * While paused in a zone only a geofence EXIT resumes tracking, and an EXIT
+     * can be late or lost: geofences are evaluated only as often as location is
+     * computed, and re-registration has no initial EXIT trigger. The heartbeat
+     * therefore checks one fix against the current zone and exits it when the
+     * fix is outside the radius by more than its own accuracy.
+     */
+    private fun verifyCurrentZone() {
+        val zoneId = settings.currentZoneId ?: return
+        if (!settings.trackingEnabled || roamingPaused) return
+        oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_VERIFY_MAX_AGE_MS)
+            .addOnSuccessListener { location ->
+                if (location == null || settings.currentZoneId != zoneId) return@addOnSuccessListener
+                if (isClearlyOutsideZone(zoneId, location.toFix())) {
+                    diagnostics.record("zone_stale_exit id=$zoneId")
+                    onZoneExited(zoneId, location)
+                }
+            }
+            .addOnFailureListener {
+                diagnostics.record("zone_verify_failed id=$zoneId ${it.javaClass.simpleName}")
+            }
+    }
+
+    private fun isClearlyOutsideZone(zoneId: String, fix: LocationFix): Boolean {
+        val zone = zoneManager.getZone(zoneId)
+        if (zone == null) {
+            diagnostics.record("zone_verify id=$zoneId reason=zone_not_found")
+            return true
+        }
+        val reason = filter.validate(fix, clock(), settings.maxLocationAgeMs, Float.MAX_VALUE)
+        if (reason != null) {
+            diagnostics.record("zone_verify id=$zoneId reason=${reason.name.lowercase()}")
+            return false
+        }
+        val distance = GeoMath.distanceMeters(fix.latitude, fix.longitude, zone.latitude, zone.longitude)
+        val outside = distance - fix.accuracyMeters > zone.radius
+        diagnostics.record(
+            "zone_verify id=$zoneId distanceMeters=${"%.0f".format(distance)} " +
+                "accuracy=${fix.accuracyMeters} outside=$outside"
+        )
+        return outside
     }
 
     /**
@@ -306,7 +353,6 @@ class LocationCoordinator(
             }
     }
 
-    @SuppressLint("MissingPermission")
     private fun oneShotLocationRequest(
         durationMs: Long,
         forceBalanced: Boolean = false,
@@ -328,9 +374,7 @@ class LocationCoordinator(
             .setMaxUpdateAgeMillis(maxUpdateAgeMillis)
             .setDurationMillis(durationMs)
             .build()
-        val cancellation = CancellationTokenSource()
-        return LocationServices.getFusedLocationProviderClient(context)
-            .getCurrentLocation(request, cancellation.token)
+        return currentLocation(request)
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -718,14 +762,12 @@ class LocationCoordinator(
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
         }
+        val triggeringFix = triggeringLocation?.toFix()
         val currentZoneId = settings.currentZoneId
-        if (currentZoneId != null) {
-            if (confirmZoneSwitch(currentZoneId, zoneId, triggeringLocation?.toFix(), now)) {
-                return
-            }
+        if (currentZoneId != null && confirmZoneSwitch(currentZoneId, zoneId, triggeringFix, now)) {
+            return
         }
         if (zoneEntryHysteresisMs > 0L) {
-            val triggeringFix = triggeringLocation?.toFix()
             val coarse = triggeringFix?.let { isCoarseForZone(zoneId, it, now) } ?: false
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
@@ -735,7 +777,9 @@ class LocationCoordinator(
                 "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
                     "triggering=${triggeringFix != null}$coarseFlag"
             )
-            if (!confirmZoneEntryFromFix(zoneId, triggeringFix, now)) {
+            // A failed switch has already evaluated the triggering fix.
+            val confirmed = currentZoneId == null && confirmZoneEntryFromFix(zoneId, triggeringFix, now)
+            if (!confirmed) {
                 pendingZoneEntryJob = scope.launch {
                     delay(zoneEntryHysteresisMs)
                     confirmZoneEntry(zoneId)
@@ -882,7 +926,9 @@ class LocationCoordinator(
             )
             return false
         }
-        publishDepartureFix(fromZoneId, fix)
+        // The fix is the device's new position: publish it under the entered
+        // zone's cap, which is the cap it was just validated against.
+        publish(fix, accuracyCapForZone(toZone))
         clearPendingZoneEntry()
         diagnostics.record("zone_switch from=$fromZoneId to=$toZoneId accuracy=${fix.accuracyMeters}")
         Log.i(TAG, "Zone switch: $fromZoneId -> $toZoneId — stale pause resolved")
@@ -941,10 +987,18 @@ class LocationCoordinator(
      */
     private fun onZonesUpdated(zoneIds: List<String>) {
         scope.launch {
-            val pendingZoneId = pendingZoneEntryId ?: return@launch
-            if (zoneIds.contains(pendingZoneId)) return@launch
-            clearPendingZoneEntry()
-            diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+            val pendingZoneId = pendingZoneEntryId
+            if (pendingZoneId != null && !zoneIds.contains(pendingZoneId)) {
+                clearPendingZoneEntry()
+                diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+            }
+            // ZoneManager clears a current zone that is no longer listed; resume
+            // now instead of waiting for the next heartbeat.
+            if (zonePaused && settings.currentZoneId == null) {
+                diagnostics.record("zone_pause_released reason=zone_removed")
+                publishUiState()
+                ensureRegistered()
+            }
         }
     }
 
@@ -1421,6 +1475,9 @@ class LocationCoordinator(
         /** How stale a one-shot fix may be when confirming a zone entry. */
         private const val ZONE_CONFIRM_MAX_AGE_MS = 60_000L
 
+        /** How stale a cached fix may be for the heartbeat's current-zone check. */
+        private const val ZONE_VERIFY_MAX_AGE_MS = 2 * 60_000L
+
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2
         private const val REQUEST_CODE_BURST_END = 3
@@ -1436,3 +1493,8 @@ class LocationCoordinator(
         val direct: Boolean
     )
 }
+
+@SuppressLint("MissingPermission")
+private fun fusedCurrentLocation(context: Context, request: CurrentLocationRequest): Task<Location> =
+    LocationServices.getFusedLocationProviderClient(context)
+        .getCurrentLocation(request, CancellationTokenSource().token)

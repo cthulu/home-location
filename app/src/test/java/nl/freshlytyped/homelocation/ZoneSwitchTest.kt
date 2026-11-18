@@ -1,8 +1,14 @@
 package nl.freshlytyped.homelocation
 
+import android.Manifest
+import android.app.Application
 import android.content.Context
 import android.location.Location
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import com.google.android.gms.tasks.Tasks
+import java.io.File
+import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,6 +21,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -32,12 +39,19 @@ class ZoneSwitchTest {
     private lateinit var context: Context
     private lateinit var settings: LocationSettings
     private lateinit var coordinator: LocationCoordinator
+    private lateinit var diagnostics: DiagnosticLogger
 
     private var clockValue: Long = 1_000_000L
+
+    /** What the one-shot location request (hysteresis fallback) answers with. */
+    private var oneShotLocation: Location? = null
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
+        shadowOf(context as Application).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+        File(context.filesDir, "diagnostics.log").delete()
+        diagnostics = DiagnosticLogger(context)
         settings = LocationSettings(context)
         settings.publishKey = "pub"
         settings.subscribeKey = "sub"
@@ -53,9 +67,10 @@ class ZoneSwitchTest {
             settings = settings,
             permissions = permissions,
             publisher = publisher,
-            diagnostics = DiagnosticLogger(context),
+            diagnostics = diagnostics,
             clock = { clockValue },
-            zoneEntryHysteresisMs = 60_000L
+            zoneEntryHysteresisMs = 60_000L,
+            currentLocation = { Tasks.forResult(oneShotLocation) }
         )
     }
 
@@ -93,10 +108,19 @@ class ZoneSwitchTest {
     /** Puts the coordinator in a stale "home" state: current, not debounced. */
     private fun staleHome() {
         persistZones(zone("home"), zone("cgu", longitude = cguLongitude))
-        settings.currentZoneId = "home"
+        pauseIn("home")
+    }
+
+    /** Makes [zoneId] current and pauses tracking, as on a real device. */
+    private fun pauseIn(zoneId: String) {
+        settings.currentZoneId = zoneId
         // Long enough ago that the 3-minute enter debounce does not block.
         settings.lastZoneTransitionMs = clockValue - 10 * 60_000L
+        coordinator.ensureRegistered()
     }
+
+    private fun countInLog(event: String): Int =
+        diagnostics.snapshot().lines().count { it.contains(event) }
 
     @Test
     fun `a good triggering fix switches a stale current zone`() {
@@ -117,14 +141,28 @@ class ZoneSwitchTest {
         // cgu radius 40 m: the zone-aware cap is max(50, 40) = 50 m, so a
         // 100 m trigger cannot confirm a switch.
         persistZones(zone("home"), zone("cgu", longitude = cguLongitude, radius = 40))
-        settings.currentZoneId = "home"
-        settings.lastZoneTransitionMs = clockValue - 10 * 60_000L
+        pauseIn("home")
 
         coordinator.onZoneEntered("cgu", fixAt(52.0, cguLongitude, accuracy = 100f))
 
         assertEquals("home", settings.currentZoneId)
         // The entry is still armed so a later usable fix can confirm the switch.
         assertEquals("cgu", coordinator.testPendingZoneEntryId)
+        // The triggering fix is evaluated once, not again as a plain entry.
+        assertEquals(1, countInLog("zone_switch_rejected"))
+    }
+
+    @Test
+    fun `a switch publishes under the entered zone cap`() {
+        // A 200 m fix is within the 300 m cgu cap but far above the 50 m cap of
+        // the small home zone it leaves; it must still be published.
+        persistZones(zone("home", radius = 50), zone("cgu", longitude = cguLongitude, radius = 300))
+        pauseIn("home")
+
+        coordinator.onZoneEntered("cgu", fixAt(52.0, cguLongitude, accuracy = 200f))
+
+        assertEquals("cgu", settings.currentZoneId)
+        assertEquals(cguLongitude, settings.lastPublishedLon, 1e-6)
     }
 
     @Test
@@ -132,8 +170,7 @@ class ZoneSwitchTest {
         // 0.0035 deg lon east of home center is ~240 m: inside both 300 m
         // radii, so the fix cannot prove the device left home.
         persistZones(zone("home", radius = 300), zone("cgu", longitude = 5.0035, radius = 300))
-        settings.currentZoneId = "home"
-        settings.lastZoneTransitionMs = clockValue - 10 * 60_000L
+        pauseIn("home")
 
         coordinator.onZoneEntered("cgu", fixAt(52.0, 5.0035, accuracy = 10f))
 
@@ -153,23 +190,33 @@ class ZoneSwitchTest {
     }
 
     @Test
-    fun `a later usable fix confirms a switch for a pending entry`() {
+    fun `the hysteresis one-shot confirms a switch for a pending entry`() {
         // cgu radius 40 m so the 100 m trigger cannot confirm the switch; the
-        // entry arms, and a later good fix (still while "home" is current)
-        // confirms the switch through the pending-entry path.
+        // entry arms, and the one-shot after the hysteresis delay confirms it.
         persistZones(zone("home"), zone("cgu", longitude = cguLongitude, radius = 40))
-        settings.currentZoneId = "home"
-        settings.lastZoneTransitionMs = clockValue - 10 * 60_000L
+        pauseIn("home")
 
         coordinator.onZoneEntered("cgu", fixAt(52.0, cguLongitude, accuracy = 100f))
         assertEquals("home", settings.currentZoneId)
 
-        // Within the 10-minute confirmation window a usable fix arrives.
         clockValue += 60_000L
-        coordinator.onLocationUpdates(listOf(fixAt(52.0, cguLongitude, accuracy = 10f)))
+        oneShotLocation = fixAt(52.0, cguLongitude, accuracy = 10f)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(61))
 
         assertEquals("cgu", settings.currentZoneId)
         assertNull(coordinator.testPendingZoneEntryId)
+    }
+
+    @Test
+    fun `location updates are not delivered while paused`() {
+        persistZones(zone("home"), zone("cgu", longitude = cguLongitude, radius = 40))
+        pauseIn("home")
+        coordinator.onZoneEntered("cgu", fixAt(52.0, cguLongitude, accuracy = 100f))
+
+        clockValue += 30_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, cguLongitude, accuracy = 10f)))
+
+        assertEquals("home", settings.currentZoneId)
     }
 
     @Test

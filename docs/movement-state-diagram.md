@@ -51,6 +51,8 @@ stateDiagram-v2
       While a zone is current, an ENTER for a *different* zone can confirm a
       zone switch from the event's triggering fix (see "Zone switch"), so a
       stale pause resolves itself without waiting for an EXIT.
+      The heartbeat also checks one fix against the current zone and exits
+      it when the fix is clearly outside (see "Current zone check").
     end note
 ```
 
@@ -142,18 +144,34 @@ addition to) arming a pending entry:
 - it must lie outside the current zone (guards against a coarse fix that is
   inside both).
 
-When all three hold, the current zone's departure fix is published (so the
-tracker sees the device leave it), the entered zone becomes current, and the
-pause persists — the device is inside a zone either way, and a real EXIT for it
-resumes tracking as usual.
+When all three hold, the fix is published under the entered zone's zone-aware
+cap (so the tracker sees the device leave the old zone and arrive in the new
+one), the entered zone becomes current, and the pause persists — the device is
+inside a zone either way, and a real EXIT for it resumes tracking as usual.
 
-The switch is attempted from the triggering fix, from the pending entry's
-one-shot fallback, and from any fix that arrives while a pending entry exists,
-so a stale pause (the device is really elsewhere but the current zone was never
-exited) resolves itself with the first usable fix that proves the device is in
-the other zone. Every rejected switch attempt is recorded in the diagnostics.
-A null triggering fix can confirm a switch only after a later usable fix
-arrives, and an ENTER for the zone that is already current changes nothing.
+The switch is attempted once from the triggering fix and, if that fails, from
+the pending entry's one-shot fallback. Ordinary location updates are not
+delivered while paused, so they cannot confirm a switch. A stale pause (the
+device is really elsewhere but the current zone was never exited) resolves
+itself with the first usable fix that proves the device is in the other zone.
+Every rejected switch attempt is recorded in the diagnostics. A null triggering
+fix can confirm a switch only through the one-shot fallback, and an ENTER for
+the zone that is already current changes nothing.
+
+### Current zone check
+
+A switch only helps when the device reaches another zone. Leaving a zone for a
+place that is not a zone produces no ENTER, so a lost EXIT would otherwise keep
+tracking paused indefinitely. On every heartbeat while a zone is current, the
+coordinator requests one balanced fix (a cached fix up to 2 minutes old is
+allowed) and treats the zone as exited when the fix is outside the radius by
+more than its own accuracy (`distance - accuracy > radius`). The exit then
+follows the normal zone exit path, including the departure publish. A fix
+inside, or too uncertain to tell, keeps the pause. A current zone that no
+longer exists in the zone list is exited as well.
+
+When a zone list update removes the current zone, tracking resumes immediately
+instead of waiting for the next heartbeat.
 
 ### Zone exit
 
