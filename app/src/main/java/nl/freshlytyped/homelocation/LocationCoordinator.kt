@@ -696,6 +696,11 @@ class LocationCoordinator(
      * confirmation does not depend on a background-frozen hysteresis delay or
      * a fresh one-shot that may return nothing.
      *
+     * When a *different* zone is already current (so tracking is paused and no
+     * fix is ever received again), the triggering location can also confirm a
+     * zone switch instead: it is the only fix the coordinator can obtain, and
+     * without it a stale current zone pauses tracking forever.
+     *
      * A triggering fix that is too coarse to trust still arms the pending
      * entry and is reported diagnostically: the geofence engine decided the
      * device is inside the zone, so the entry is kept (and recorded) rather
@@ -704,7 +709,14 @@ class LocationCoordinator(
      */
     fun onZoneEntered(zoneId: String, triggeringLocation: Location? = null) {
         val now = clock()
-        if (settings.currentZoneId == zoneId) return
+        if (settings.currentZoneId == zoneId) {
+            // The engine re-fires ENTER for the zone we are already in (the
+            // heartbeat re-registers geofences; an initial trigger then
+            // re-announces the current state). Nothing changes, but record it
+            // so a stale pause is visible in exports instead of silent.
+            diagnostics.record("zone_enter_ignored id=$zoneId reason=already_current")
+            return
+        }
         val lastTransition = settings.lastZoneTransitionMs
         if (settings.currentZoneId != null && lastTransition > 0L &&
             now - lastTransition < settings.geofenceDebounceMs
@@ -712,6 +724,12 @@ class LocationCoordinator(
             diagnostics.record("zone_entered id=$zoneId debounce_ignored=true")
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
+        }
+        val currentZoneId = settings.currentZoneId
+        if (currentZoneId != null) {
+            if (confirmZoneSwitch(currentZoneId, zoneId, triggeringLocation?.toFix(), now)) {
+                return
+            }
         }
         if (zoneEntryHysteresisMs > 0L) {
             val triggeringFix = triggeringLocation?.toFix()
@@ -760,12 +778,15 @@ class LocationCoordinator(
     /**
      * Applies the pending entry for [zoneId] when [fix] is usable for it.
      *
-     * Returns true when the entry was applied. A fix that is merely not usable
-     * (coarse, stale, or outside the radius) leaves the pending entry in place
-     * so it can be confirmed by a later fix; only a missing zone clears it.
+     * Returns true when the entry was applied (or, while a different zone is
+     * current, when the fix confirmed a switch to [zoneId]). A fix that is
+     * merely not usable (coarse, stale, or outside the radius) leaves the
+     * pending entry in place so it can be confirmed by a later fix; only a
+     * missing zone clears it.
      */
     private fun confirmZoneEntryFromFix(zoneId: String, fix: LocationFix?, now: Long): Boolean {
-        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) {
+        val currentZoneId = settings.currentZoneId
+        if (pendingZoneEntryId != zoneId || currentZoneId == zoneId) {
             return false
         }
         expirePendingZoneEntryIfDue(now)
@@ -774,6 +795,12 @@ class LocationCoordinator(
         }
         if (fix == null) {
             return false
+        }
+        if (currentZoneId != null) {
+            // A (possibly stale) zone is current: the fix confirms a switch to
+            // the pending zone rather than a plain entry, which is the only way
+            // a stale pause can be resolved while tracking stays paused.
+            return confirmZoneSwitch(currentZoneId, zoneId, fix, now)
         }
         val zone = zoneManager.getZone(zoneId)
         if (zone == null) {
@@ -804,12 +831,81 @@ class LocationCoordinator(
     }
 
     /**
+     * Confirms a switch from [fromZoneId] to [toZoneId] when [fix] proves the
+     * device is in [toZoneId] and no longer in [fromZoneId].
+     *
+     * While a zone is current the coordinator is paused with no ongoing
+     * location request, so the only fix it can act on is a geofence event's
+     * triggering location. A stale current zone (the device is really
+     * elsewhere) then survives every heartbeat and every pending entry,
+     * because a pending entry for another zone can confirm an entry but can
+     * never move the current zone. This closes that trap: the switch is
+     * confirmed when the fix validates against the entered zone's zone-aware
+     * cap, sits inside that zone, and lies outside the current one. On success
+     * the current zone's departure fix is published, the entered zone becomes
+     * current, and the pause persists — the device is inside a zone either
+     * way, and a real EXIT for it resumes tracking as usual.
+     */
+    private fun confirmZoneSwitch(
+        fromZoneId: String,
+        toZoneId: String,
+        fix: LocationFix?,
+        now: Long
+    ): Boolean {
+        if (fix == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=no_fix")
+            return false
+        }
+        val toZone = zoneManager.getZone(toZoneId)
+        if (toZone == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=zone_not_found")
+            return false
+        }
+        val fromZone = zoneManager.getZone(fromZoneId)
+        if (fromZone == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=from_zone_not_found")
+            return false
+        }
+        val reason = filter.validate(fix, now, settings.maxLocationAgeMs, accuracyCapForZone(toZone))
+        if (reason != null) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId reason=${reason.name.lowercase()}"
+            )
+            return false
+        }
+        val toDistance = GeoMath.distanceMeters(fix.latitude, fix.longitude, toZone.latitude, toZone.longitude)
+        if (toDistance > toZone.radius) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId " +
+                    "reason=outside toDistanceMeters=${"%.0f".format(toDistance)}"
+            )
+            return false
+        }
+        val fromDistance = GeoMath.distanceMeters(fix.latitude, fix.longitude, fromZone.latitude, fromZone.longitude)
+        if (fromDistance <= fromZone.radius) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId " +
+                    "reason=still_inside fromDistanceMeters=${"%.0f".format(fromDistance)}"
+            )
+            return false
+        }
+        publishDepartureFix(fromZoneId, fix)
+        clearPendingZoneEntry()
+        diagnostics.record("zone_switch from=$fromZoneId to=$toZoneId accuracy=${fix.accuracyMeters}")
+        Log.i(TAG, "Zone switch: $fromZoneId -> $toZoneId — stale pause resolved")
+        applyZoneEntered(toZoneId, now)
+        return true
+    }
+
+    /**
      * Hysteresis fallback: after [zoneEntryHysteresisMs] ask for one fresh fix
      * and confirm from it. The relaxed [maxUpdateAgeMillis] lets the provider
      * answer with a recent cached fix instead of null when no new fix exists.
+     * While a different zone is current the same fix confirms a zone switch,
+     * so a stale pause is also resolved by this background-capable fallback.
      */
     private fun confirmZoneEntry(zoneId: String) {
-        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) return
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId == zoneId) return
         oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_CONFIRM_MAX_AGE_MS)
             .addOnSuccessListener { location ->
                 if (pendingZoneEntryId != zoneId) return@addOnSuccessListener
@@ -860,12 +956,15 @@ class LocationCoordinator(
     }
 
     /**
-     * Clears the pending entry once the bounded confirmation window has elapsed,
-     * so a never-confirmed entry (e.g. only coarse fixes) does not linger.
+     * Clears the pending entry once the bounded confirmation window has
+     * elapsed, so a never-confirmed entry (e.g. only coarse fixes) does not
+     * linger. The expiry applies even while a (possibly stale) zone is
+     * current: the pending entry only carries the armed zone for the
+     * confirmation (or switch) attempt, so dropping it after the window is
+     * safe — a new ENTER/DWELL re-arms it.
      */
     private fun expirePendingZoneEntryIfDue(now: Long) {
         val zoneId = pendingZoneEntryId ?: return
-        if (settings.currentZoneId != null) return
         if (pendingZoneEntryArmedAtMs > 0L && now - pendingZoneEntryArmedAtMs > zoneEntryWindowMs) {
             diagnostics.record("zone_enter_expired id=$zoneId")
             clearPendingZoneEntry()
@@ -876,10 +975,11 @@ class LocationCoordinator(
      * Re-evaluates the pending zone entry against a fresh fix, so an entry that
      * could not be confirmed by the triggering location (or the one-shot) is
      * confirmed as soon as a usable fix arrives within the bounded window.
+     * While a different zone is current the same fix confirms a zone switch
+     * instead, which is what resolves a stale pause.
      */
     private fun evaluatePendingZoneEntry(fix: LocationFix, now: Long) {
         val zoneId = pendingZoneEntryId ?: return
-        if (settings.currentZoneId != null) return
         expirePendingZoneEntryIfDue(now)
         if (pendingZoneEntryId != zoneId) return // expired in the call above
         confirmZoneEntryFromFix(zoneId, fix, now)

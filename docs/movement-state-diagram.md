@@ -48,6 +48,9 @@ stateDiagram-v2
       trigger so a device booted inside a zone pauses immediately.
       An ENTER is confirmed against a location fix (see
       "Zone entry confirmation") before tracking pauses.
+      While a zone is current, an ENTER for a *different* zone can confirm a
+      zone switch from the event's triggering fix (see "Zone switch"), so a
+      stale pause resolves itself without waiting for an EXIT.
     end note
 ```
 
@@ -121,6 +124,34 @@ entry expires rather than lingering. The window is checked on each update and on
 the heartbeat as a backstop. The pending entry also tracks the persisted zone
 list: if a new zone list no longer contains the armed zone, the entry is dropped
 immediately rather than lingering until the window expires.
+
+### Zone switch
+
+While a zone is current the coordinator is paused with no ongoing location
+request, so the only fix it can act on is a geofence event's triggering
+location. If the geofence engine then reports an ENTER (or DWELL) for a
+*different* zone — which is the normal signal that the device really left the
+current zone — the coordinator attempts a **zone switch** instead of (or in
+addition to) arming a pending entry:
+
+- The triggering fix must validate against the entered zone's zone-aware
+  accuracy cap (same rules as entry confirmation),
+- its fix point must sit inside the entered zone, and
+- it must lie outside the current zone (guards against a coarse fix that is
+  inside both).
+
+When all three hold, the current zone's departure fix is published (so the
+tracker sees the device leave it), the entered zone becomes current, and the
+pause persists — the device is inside a zone either way, and a real EXIT for it
+resumes tracking as usual.
+
+The switch is attempted from the triggering fix, from the pending entry's
+one-shot fallback, and from any fix that arrives while a pending entry exists,
+so a stale pause (the device is really elsewhere but the current zone was never
+exited) resolves itself with the first usable fix that proves the device is in
+the other zone. Every rejected switch attempt is recorded in the diagnostics.
+A null triggering fix can confirm a switch only after a later usable fix
+arrives, and an ENTER for the zone that is already current changes nothing.
 
 ### Zone exit
 
