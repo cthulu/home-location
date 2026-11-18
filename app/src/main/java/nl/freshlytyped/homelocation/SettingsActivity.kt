@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import nl.freshlytyped.homelocation.databinding.ActivitySettingsBinding
+import java.util.Locale
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -65,9 +66,14 @@ class SettingsActivity : AppCompatActivity() {
         binding.etChannel.setText(settings.channel)
         binding.etDeviceName.setText(settings.deviceName)
         binding.swPreciseMode.isChecked = settings.preciseMode
-        binding.etGpsFixInterval.setText((settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS).toString())
+        showGpsFixInterval()
         binding.swGeofencing.isChecked = settings.geofencingEnabled
         updateCachedZonesDisplay()
+    }
+
+    private fun showGpsFixInterval() {
+        val minutes = settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS
+        binding.etGpsFixInterval.setText(String.format(Locale.ROOT, "%d", minutes))
     }
 
     private fun updateCachedZonesDisplay() {
@@ -95,7 +101,7 @@ class SettingsActivity : AppCompatActivity() {
             settings.gpsFixIntervalMs = minutes.coerceIn(MIN_GPS_FIX_MINUTES, MAX_GPS_FIX_MINUTES) *
                 LocationSettings.MINUTE_MS
         }
-        binding.etGpsFixInterval.setText((settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS).toString())
+        showGpsFixInterval()
         (application as App).locationCoordinator.setGeofencingEnabled(binding.swGeofencing.isChecked)
     }
 
