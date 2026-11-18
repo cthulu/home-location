@@ -282,8 +282,10 @@ class LocationCoordinator(
             )
         }
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
-        if (enforceHighAccuracyLimit(clock())) return
         val now = clock()
+        // The cap only resets the state; the batch is still processed so a
+        // fix proving real travel can resume moving and is published.
+        enforceHighAccuracyLimit(now)
         for (location in locations) {
             handleFix(location.toFix(), now)
         }
@@ -407,28 +409,22 @@ class LocationCoordinator(
                 "distanceFromPublished=${publishedDistance ?: -1.0} state=${settings.movementState}"
         )
 
-        val movementCooldownActive =
-            settings.movementState == MovementState.STATIONARY &&
-                now < settings.activityCooldownUntilMs
-        val decision = if (movementCooldownActive) {
-            MovementDecision.NoChange()
-        } else {
-            controller.observe(
-                MovementEvidence.Fix(fix),
-                settings.movementState,
-                settings.lastKnownLat,
-                settings.lastKnownLon,
-                settings.hasLastKnown(),
-                settings.accumulatedDistanceMeters,
-                settings.lastMovementEvidenceTimeMs,
-                now
-            )
-        }
+        // The high-accuracy cooldown only silences activity recognition: a fix
+        // that accumulates the movement distance is real travel and resumes
+        // moving mode.
+        val decision = controller.observe(
+            MovementEvidence.Fix(fix),
+            settings.movementState,
+            settings.lastKnownLat,
+            settings.lastKnownLon,
+            settings.hasLastKnown(),
+            settings.accumulatedDistanceMeters,
+            settings.lastMovementEvidenceTimeMs,
+            now
+        )
 
         if (decision.isEvidence) {
             settings.lastMovementEvidenceTimeMs = now
-            settings.accumulatedDistanceMeters = 0f
-        } else if (movementCooldownActive) {
             settings.accumulatedDistanceMeters = 0f
         } else {
             settings.accumulatedDistanceMeters = controller.nextAccumulatedMeters(

@@ -84,7 +84,9 @@ leaving high-accuracy tracking active indefinitely.
 During a running session, the same limit applies even when activity recognition
 continually reports movement. Activity-only movement evidence is ignored during
 the cooldown after that reset; a location fix crossing the configured distance
-threshold can resume moving mode.
+threshold can resume moving mode. The fixes in the batch that triggers the reset
+are still evaluated and published, so a device that is really travelling
+resumes moving mode immediately instead of going dark for the cooldown.
 
 ### Zone entry confirmation
 
