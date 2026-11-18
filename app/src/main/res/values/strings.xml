@@ -57,7 +57,9 @@
     <string name="settings_device_name_hint">Android device name</string>
     <string name="settings_section_tracking">Tracking behavior</string>
     <string name="settings_precise_mode_label">High accuracy while moving</string>
-    <string name="settings_precise_mode_hint">Uses GPS while moving (more battery), balanced accuracy while stationary.</string>
+    <string name="settings_precise_mode_hint">Takes a GPS fix every few minutes while moving (more battery). When off, only network location is used and coarse positions are reported while moving.</string>
+    <string name="settings_gps_fix_interval_label">GPS fix interval while moving (minutes)</string>
+    <string name="settings_gps_fix_interval_hint">5</string>
 
     <!-- Geofencing section -->
     <string name="settings_section_geofencing">Geofencing</string>

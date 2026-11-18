@@ -9,39 +9,17 @@ class LocationRequestFactoryTest {
     private val factory = LocationRequestFactory()
 
     @Test
-    fun `moving with precise mode and fine location uses high accuracy`() {
-        val request = factory.forState(MovementState.MOVING, preciseMode = true, fineLocationGranted = true)
-        assertEquals(Priority.PRIORITY_HIGH_ACCURACY, request.priority)
-        assertEquals(30_000L, request.interval)
-        assertEquals(60_000L, request.maxUpdateDelayMillis)
-    }
-
-    @Test
-    fun `moving with precise mode but no fine location falls back to balanced`() {
-        val request = factory.forState(MovementState.MOVING, preciseMode = true, fineLocationGranted = false)
+    fun `continuous request uses balanced power accuracy with modest batching`() {
+        val request = factory.balanced()
         assertEquals(Priority.PRIORITY_BALANCED_POWER_ACCURACY, request.priority)
         assertEquals(120_000L, request.interval)
         assertEquals(120_000L, request.maxUpdateDelayMillis)
     }
 
     @Test
-    fun `moving with precise mode disabled uses balanced`() {
-        val request = factory.forState(MovementState.MOVING, preciseMode = false, fineLocationGranted = true)
-        assertEquals(Priority.PRIORITY_BALANCED_POWER_ACCURACY, request.priority)
-    }
-
-    @Test
-    fun `stationary uses balanced power accuracy with modest batching`() {
-        val request = factory.forState(MovementState.STATIONARY, preciseMode = true, fineLocationGranted = true)
-        assertEquals(Priority.PRIORITY_BALANCED_POWER_ACCURACY, request.priority)
-        assertEquals(120_000L, request.interval)
-        assertEquals(120_000L, request.maxUpdateDelayMillis)
-    }
-
-    @Test
-    fun `stationary interval is clamped to the supported range`() {
-        val tooShort = factory.forState(MovementState.STATIONARY, true, true, 1_000L)
-        val tooLong = factory.forState(MovementState.STATIONARY, true, true, 900_000L)
+    fun `interval is clamped to the supported range`() {
+        val tooShort = factory.balanced(1_000L)
+        val tooLong = factory.balanced(900_000L)
 
         assertEquals(30_000L, tooShort.interval)
         assertEquals(30_000L, tooShort.maxUpdateDelayMillis)

@@ -180,6 +180,27 @@
             android:textColor="@color/on_surface_secondary"
             android:textSize="12sp" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/settings_gps_fix_interval_label"
+            android:textColor="@color/on_surface_secondary"
+            android:textSize="12sp" />
+
+        <EditText
+            android:id="@+id/etGpsFixInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/edittext_background"
+            android:hint="@string/settings_gps_fix_interval_hint"
+            android:importantForAutofill="no"
+            android:inputType="number"
+            android:padding="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

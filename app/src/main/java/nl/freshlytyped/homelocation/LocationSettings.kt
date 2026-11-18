@@ -32,6 +32,7 @@ class LocationSettings(context: Context) {
         private const val KEY_BURST_DURATION = "burst_duration_ms"
         private const val KEY_BACKGROUND_LOCATION_ENABLED = "background_location_enabled"
         private const val KEY_BACKGROUND_SCAN_INTERVAL = "background_scan_interval_ms"
+        private const val KEY_GPS_FIX_INTERVAL = "gps_fix_interval_ms"
         private const val KEY_MOVEMENT_STATE = "movement_state"
         private const val KEY_LAST_KNOWN_LAT = "last_known_lat"
         private const val KEY_LAST_KNOWN_LON = "last_known_lon"
@@ -86,7 +87,7 @@ class LocationSettings(context: Context) {
         get() = prefs.getBoolean(KEY_TRACKING_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_TRACKING_ENABLED, value).apply()
 
-    /** When true and fine location is granted, the moving state uses high-accuracy updates. */
+    /** When true and fine location is granted, the moving state takes periodic GPS fixes. */
     var preciseMode: Boolean
         get() = prefs.getBoolean(KEY_PRECISE_MODE, true)
         set(value) = prefs.edit().putBoolean(KEY_PRECISE_MODE, value).apply()
@@ -139,6 +140,11 @@ class LocationSettings(context: Context) {
     var backgroundScanIntervalMs: Long
         get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 2 * 60_000L)
         set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
+
+    /** How often a GPS fix is taken while moving (when [preciseMode] allows GPS). */
+    var gpsFixIntervalMs: Long
+        get() = prefs.getLong(KEY_GPS_FIX_INTERVAL, 5 * MINUTE_MS)
+        set(value) = prefs.edit().putLong(KEY_GPS_FIX_INTERVAL, value).apply()
 
     fun isConfigured(): Boolean =
         publishKey.isNotBlank() && subscribeKey.isNotBlank()

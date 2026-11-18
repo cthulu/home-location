@@ -106,6 +106,7 @@ class LocationCoordinator(
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
+    private var lastGpsFixRequestMs = 0L
     private val _uiState = MutableStateFlow(currentUiState())
 
     val uiState: StateFlow<TrackingUiState> = _uiState
@@ -353,6 +354,33 @@ class LocationCoordinator(
         for (location in locations) {
             handleFix(location.toFix(), now)
         }
+        requestGpsFixIfDue(now)
+    }
+
+    /** GPS is used only when the user enabled it and fine location is granted. */
+    private fun gpsAllowed(): Boolean = settings.preciseMode && permissions.fineGranted()
+
+    /**
+     * While moving, the continuous request stays balanced and GPS is used for
+     * one fix every [LocationSettings.gpsFixIntervalMs]. Driven by the switch
+     * to moving and the continuous callbacks, so it adds no alarm or wakeup.
+     */
+    private fun requestGpsFixIfDue(now: Long) {
+        if (settings.movementState != MovementState.MOVING || !gpsAllowed()) return
+        if (lastGpsFixRequestMs > 0L && now - lastGpsFixRequestMs < settings.gpsFixIntervalMs) return
+        lastGpsFixRequestMs = now
+        diagnosticsRecord("gps_fix_requested")
+        oneShotLocationRequest(GPS_FIX_TIMEOUT_MS)
+            .addOnSuccessListener { location ->
+                if (location == null) {
+                    diagnosticsRecord("gps_fix_failed reason=no_location")
+                } else if (settings.trackingEnabled && !roamingPaused && !zonePaused) {
+                    handleFix(location.toFix(), clock())
+                }
+            }
+            .addOnFailureListener {
+                diagnosticsRecord("gps_fix_failed ${it.javaClass.simpleName}")
+            }
     }
 
     /** Requests one fresh fix so starting tracking gives immediate feedback. */
@@ -524,17 +552,43 @@ class LocationCoordinator(
             settings.lastKnownLon,
             settings.hasLastKnown()
         )
-        if (!decision.isEvidence) {
+        if (decision.isEvidence) {
+            diagnosticsRecord("location_fix coarse_movement_evidence accuracy=${fix.accuracyMeters}")
+            settings.lastMovementEvidenceTimeMs = now
+            settings.accumulatedDistanceMeters = 0f
+            applyStateChange(decision)
+        } else {
             diagnosticsRecord(
                 "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
                     "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
             )
-            return
         }
-        diagnosticsRecord("location_fix coarse_movement_evidence accuracy=${fix.accuracyMeters}")
-        settings.lastMovementEvidenceTimeMs = now
-        settings.accumulatedDistanceMeters = 0f
-        applyStateChange(decision)
+        if (settings.movementState == MovementState.MOVING && !gpsAllowed()) {
+            publishCoarseFix(fix, now)
+        }
+    }
+
+    /**
+     * Without GPS a moving device mostly gets network fixes, so those are
+     * published up to a looser cap. Only a move from the last published
+     * position larger than the fix's own accuracy counts, so coarse jitter is
+     * never reported as movement.
+     */
+    private fun publishCoarseFix(fix: LocationFix, now: Long) {
+        val cap = maxOf(settings.maxAccuracyMeters, COARSE_PUBLISH_MAX_ACCURACY_METERS)
+        val ctx = buildFilterContext().copy(
+            maxAccuracyMeters = cap,
+            minDistanceMeters = maxOf(settings.minDistanceMeters, fix.accuracyMeters)
+        )
+        when (val result = filter.evaluate(fix, now, ctx)) {
+            is LocationDecision.Accept -> {
+                diagnosticsRecord("location_decision accept coarse accuracy=${fix.accuracyMeters}")
+                publish(fix, cap)
+            }
+            is LocationDecision.Reject -> {
+                diagnosticsRecord("location_decision reject coarse reason=${result.reason}")
+            }
+        }
     }
 
     private fun diagnosticsRecord(event: String) {
@@ -1155,9 +1209,9 @@ class LocationCoordinator(
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> MOVING")
                 diagnostics.record("state_transition stationary_to_moving")
-                registerLocationUpdates()
                 scheduleBurstRevert()
                 cancelPeriodicPublish()
+                requestGpsFixIfDue(clock())
             }
 
             is MovementDecision.ToStationary -> {
@@ -1166,7 +1220,6 @@ class LocationCoordinator(
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> STATIONARY")
                 diagnostics.record("state_transition moving_to_stationary")
-                registerLocationUpdates()
                 cancelBurstAlarm()
                 if (settings.periodicFallbackEnabled) schedulePeriodicPublish()
                 else cancelPeriodicPublish()
@@ -1253,20 +1306,12 @@ class LocationCoordinator(
         if (!hasLocationPermission()) return
         val client = LocationServices.getFusedLocationProviderClient(context)
         val registrationKey = LocationRegistrationKey(
-            state = settings.movementState,
-            precise = settings.preciseMode,
-            fineGranted = permissions.fineGranted(),
-            stationaryIntervalMs = settings.backgroundScanIntervalMs,
+            intervalMs = settings.backgroundScanIntervalMs,
             direct = directLocationCallback != null
         )
         if (registeredLocationKey == registrationKey) return
         removeLocationRegistration()
-        val request = requestFactory.forState(
-            settings.movementState,
-            settings.preciseMode,
-            permissions.fineGranted(),
-            settings.backgroundScanIntervalMs
-        )
+        val request = requestFactory.balanced(settings.backgroundScanIntervalMs)
         val callback = directLocationCallback
         if (callback != null && directLocationLooper != null) {
             runCatching {
@@ -1520,6 +1565,11 @@ class LocationCoordinator(
         /** How stale a cached fix may be for the heartbeat's current-zone check. */
         private const val ZONE_VERIFY_MAX_AGE_MS = 2 * 60_000L
 
+        private const val GPS_FIX_TIMEOUT_MS = 30_000L
+
+        /** Accuracy cap for network fixes published while moving without GPS. */
+        private const val COARSE_PUBLISH_MAX_ACCURACY_METERS = 200f
+
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2
         private const val REQUEST_CODE_BURST_END = 3
@@ -1528,10 +1578,7 @@ class LocationCoordinator(
     }
 
     private data class LocationRegistrationKey(
-        val state: MovementState,
-        val precise: Boolean,
-        val fineGranted: Boolean,
-        val stationaryIntervalMs: Long,
+        val intervalMs: Long,
         val direct: Boolean
     )
 }

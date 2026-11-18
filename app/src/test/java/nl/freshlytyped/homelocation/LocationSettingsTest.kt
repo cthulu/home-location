@@ -35,6 +35,7 @@ class LocationSettingsTest {
         assertEquals(10 * 60_000L, settings.burstDurationMs)
         assertFalse(settings.periodicFallbackEnabled)
         assertTrue(settings.preciseMode)
+        assertEquals(5 * 60_000L, settings.gpsFixIntervalMs)
         assertFalse(settings.trackingEnabled)
         assertEquals(MovementState.STATIONARY, settings.movementState)
     }

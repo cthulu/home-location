@@ -23,14 +23,17 @@ stateDiagram-v2
 
     MOVING --> STATIONARY: burst alarm and no evidence
     MOVING --> STATIONARY: service start and moving state > 15 min
-    MOVING --> STATIONARY: runtime high-accuracy limit
+    MOVING --> STATIONARY: runtime 15-minute moving limit
     STATIONARY --> MOVING: location distance threshold during activity cooldown
 
     STATIONARY --> STATIONARY: still activity
     STATIONARY --> STATIONARY: fix below movement threshold
 
     note right of MOVING
-      High-accuracy location request
+      Balanced-power location request continues
+      GPS one-shot fix on entry, then every 5 min
+      (only with "High accuracy while moving")
+      Without GPS: coarse fixes up to 200 m are published
       Periodic fallback is cancelled
     end note
 
@@ -70,23 +73,42 @@ The coordinator switches to `MOVING` when it receives one of these signals:
 - A coarse fix (accuracy worse than 50 m) lies at least the configured
   movement distance plus its own accuracy away from the last reliable fix.
 
-Coarse fixes never accumulate distance, never replace the last reliable fix
-and are never published. Requiring the whole uncertainty circle to clear the
-threshold keeps coarse jitter around a stationary device from switching into
-high-accuracy mode, while still detecting travel when the balanced request only
+Coarse fixes never accumulate distance and never replace the last reliable
+fix. Requiring the whole uncertainty circle to clear the threshold keeps
+coarse jitter around a stationary device from switching into moving mode,
+while still detecting travel when the balanced request only
 yields network fixes. Wi-Fi loss triggers only a balanced one-shot verification
-fix; it no longer switches state directly. The stationary scan defaults to a 2-minute interval with batched
-delivery, similar to Home Assistant Companion's background cadence.
+fix; it no longer switches state directly. The continuous scan defaults to a
+2-minute interval with batched delivery, similar to Home Assistant Companion's
+background cadence.
 
-The high-accuracy request is then registered and the burst-expiry alarm is
-scheduled.
+The burst-expiry alarm is then scheduled.
+
+### GPS while `MOVING`
+
+The continuous location request is balanced power accuracy in both states, so
+GPS is never left running. When "High accuracy while moving" is enabled and
+fine location is granted, the coordinator takes a GPS one-shot fix (30 s
+timeout) on entering `MOVING` and then at most once per GPS fix interval
+(5 minutes by default, configurable in settings). The check runs on each
+continuous location callback, so it needs no alarm of its own; the effective
+interval is the configured one rounded up to the next callback. A GPS fix goes
+through the normal fix handling: it updates the last reliable fix and is
+published by the filter.
+
+When the switch is off, or only approximate location is granted, GPS is never
+used. While `MOVING`, coarse fixes are then published with an accuracy cap of
+200 m (or the configured publish cap if larger), and only when the distance
+from the last published position exceeds the fix's own accuracy, so coarse
+jitter is not reported as movement. In `STATIONARY` the normal 50 m publish
+cap applies either way.
 
 ### `MOVING` to `STATIONARY`
 
 The coordinator returns to `STATIONARY` when the burst-expiry alarm fires and
 no recent movement evidence exists. A moving state that has survived a
 service restart for more than 15 minutes is also reset to stationary to avoid
-leaving high-accuracy tracking active indefinitely.
+leaving moving mode (and its GPS fixes) active indefinitely.
 
 During a running session, the same limit applies even when activity recognition
 continually reports movement. Activity-only movement evidence is ignored during

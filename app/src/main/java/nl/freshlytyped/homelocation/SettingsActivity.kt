@@ -65,6 +65,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.etChannel.setText(settings.channel)
         binding.etDeviceName.setText(settings.deviceName)
         binding.swPreciseMode.isChecked = settings.preciseMode
+        binding.etGpsFixInterval.setText((settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS).toString())
         binding.swGeofencing.isChecked = settings.geofencingEnabled
         updateCachedZonesDisplay()
     }
@@ -90,6 +91,16 @@ class SettingsActivity : AppCompatActivity() {
         settings.channel = binding.etChannel.text.toString().ifBlank { LocationSettings.DEFAULT_CHANNEL }
         settings.deviceName = binding.etDeviceName.text.toString()
         settings.preciseMode = binding.swPreciseMode.isChecked
+        binding.etGpsFixInterval.text.toString().toLongOrNull()?.let { minutes ->
+            settings.gpsFixIntervalMs = minutes.coerceIn(MIN_GPS_FIX_MINUTES, MAX_GPS_FIX_MINUTES) *
+                LocationSettings.MINUTE_MS
+        }
+        binding.etGpsFixInterval.setText((settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS).toString())
         settings.geofencingEnabled = binding.swGeofencing.isChecked
+    }
+
+    companion object {
+        private const val MIN_GPS_FIX_MINUTES = 1L
+        private const val MAX_GPS_FIX_MINUTES = 30L
     }
 }
