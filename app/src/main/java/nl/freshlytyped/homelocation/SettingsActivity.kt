@@ -43,6 +43,9 @@ class SettingsActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
 
         loadIntoForm()
+        binding.swPreciseMode.setOnCheckedChangeListener { _, _ ->
+            updateGpsFixIntervalEnabled()
+        }
         binding.btnSave.setOnClickListener {
             saveFromForm()
             binding.tvSaved.visibility = View.VISIBLE
@@ -67,6 +70,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.etDeviceName.setText(settings.deviceName)
         binding.swPreciseMode.isChecked = settings.preciseMode
         showGpsFixInterval()
+        updateGpsFixIntervalEnabled()
         binding.swGeofencing.isChecked = settings.geofencingEnabled
         updateCachedZonesDisplay()
     }
@@ -74,6 +78,15 @@ class SettingsActivity : AppCompatActivity() {
     private fun showGpsFixInterval() {
         val minutes = settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS
         binding.etGpsFixInterval.setText(String.format(Locale.ROOT, "%d", minutes))
+    }
+
+    /** The interval only applies while high accuracy is on, so disable and dim it when off. */
+    private fun updateGpsFixIntervalEnabled() {
+        val enabled = binding.swPreciseMode.isChecked
+        binding.tvGpsFixIntervalLabel.isEnabled = enabled
+        binding.tvGpsFixIntervalLabel.alpha = if (enabled) 1f else 0.5f
+        binding.etGpsFixInterval.isEnabled = enabled
+        binding.etGpsFixInterval.alpha = if (enabled) 1f else 0.5f
     }
 
     private fun updateCachedZonesDisplay() {
