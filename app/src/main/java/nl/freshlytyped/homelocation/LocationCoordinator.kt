@@ -220,13 +220,18 @@ class LocationCoordinator(
     /** Return the zone names currently cached on this device. */
     fun getCachedZoneNames(): List<String> = zoneManager.getZones().map { it.name }
 
-    fun onHeartbeat() {
+    /**
+     * [onComplete] runs once the heartbeat's asynchronous work (the current
+     * zone check) has finished, so the caller can keep the device awake until
+     * then.
+     */
+    fun onHeartbeat(onComplete: () -> Unit = {}) {
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
         // Backstop: expire a never-confirmed entry even if no fixes arrive.
         expirePendingZoneEntryIfDue(clock())
-        verifyCurrentZone()
+        verifyCurrentZone(onComplete)
     }
 
     /**
@@ -236,20 +241,32 @@ class LocationCoordinator(
      * therefore checks one fix against the current zone and exits it when the
      * fix is outside the radius by more than its own accuracy.
      */
-    private fun verifyCurrentZone() {
-        val zoneId = settings.currentZoneId ?: return
-        if (!settings.trackingEnabled || roamingPaused) return
+    private fun verifyCurrentZone(onComplete: () -> Unit) {
+        val zoneId = settings.currentZoneId
+        if (zoneId == null || !settings.trackingEnabled || roamingPaused) {
+            onComplete()
+            return
+        }
         oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_VERIFY_MAX_AGE_MS)
-            .addOnSuccessListener { location ->
-                if (location == null || settings.currentZoneId != zoneId) return@addOnSuccessListener
-                if (isClearlyOutsideZone(zoneId, location.toFix())) {
-                    diagnostics.record("zone_stale_exit id=$zoneId")
-                    onZoneExited(zoneId, location)
+            .addOnCompleteListener { task ->
+                try {
+                    if (task.isSuccessful) {
+                        exitZoneIfClearlyOutside(zoneId, task.result)
+                    } else {
+                        diagnostics.record("zone_verify_failed id=$zoneId ${task.exception?.javaClass?.simpleName}")
+                    }
+                } finally {
+                    onComplete()
                 }
             }
-            .addOnFailureListener {
-                diagnostics.record("zone_verify_failed id=$zoneId ${it.javaClass.simpleName}")
-            }
+    }
+
+    private fun exitZoneIfClearlyOutside(zoneId: String, location: Location?) {
+        if (location == null || settings.currentZoneId != zoneId) return
+        if (isClearlyOutsideZone(zoneId, location.toFix())) {
+            diagnostics.record("zone_stale_exit id=$zoneId")
+            onZoneExited(zoneId, location)
+        }
     }
 
     private fun isClearlyOutsideZone(zoneId: String, fix: LocationFix): Boolean {
@@ -1476,8 +1493,10 @@ class LocationCoordinator(
     private fun scheduleHeartbeat() {
         val alarm = alarmManager() ?: return
         val triggerAt = SystemClock.elapsedRealtime() + HEARTBEAT_INTERVAL_MS
+        // Wakeup: a device paused in a zone sits in Doze with nothing else to
+        // wake it, and the heartbeat's zone check must still run on time.
         runCatching {
-            alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, heartbeatPendingIntent())
+            alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, heartbeatPendingIntent())
         }.onFailure { Log.w(TAG, "Failed to schedule heartbeat", it) }
     }
 

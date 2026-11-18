@@ -175,6 +175,12 @@ follows the normal zone exit path, including the departure publish. A fix
 inside, or too uncertain to tell, keeps the pause. A current zone that no
 longer exists in the zone list is exited as well.
 
+A device paused in a zone has no location or activity requests that would
+wake it, so the heartbeat is a wakeup alarm, and its broadcast stays open
+(bounded at 45 seconds) until the check's fix arrives or fails. Otherwise the
+check would wait in Doze for an unrelated wakeup, or the device would sleep
+before the fix was delivered.
+
 When a zone list update removes the current zone, tracking resumes immediately
 instead of waiting for the next heartbeat.
 

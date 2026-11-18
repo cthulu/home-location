@@ -1,17 +1,21 @@
 package nl.freshlytyped.homelocation
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.Application
 import android.content.Context
 import android.location.Location
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.android.gms.tasks.Tasks
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -39,7 +43,7 @@ class CurrentZoneCheckTest {
     private lateinit var coordinator: LocationCoordinator
 
     private var clockValue: Long = 1_000_000L
-    private var oneShotLocation: Location? = null
+    private var oneShotTask: () -> Task<Location> = { Tasks.forResult(null) }
 
     @Before
     fun setup() {
@@ -70,7 +74,7 @@ class CurrentZoneCheckTest {
             publisher = publisher,
             diagnostics = diagnostics,
             clock = { clockValue },
-            currentLocation = { Tasks.forResult(oneShotLocation) }
+            currentLocation = { oneShotTask() }
         )
         settings.currentZoneId = "home"
         settings.lastZoneTransitionMs = clockValue - 60 * 60_000L
@@ -85,10 +89,12 @@ class CurrentZoneCheckTest {
     }
 
     private fun heartbeatWith(location: Location?) {
-        oneShotLocation = location
+        oneShotTask = { Tasks.forResult(location) }
         coordinator.onHeartbeat()
         shadowOf(Looper.getMainLooper()).idle()
     }
+
+    private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
     @Test
     fun `a fix clearly outside the current zone exits it and resumes tracking`() {
@@ -133,5 +139,53 @@ class CurrentZoneCheckTest {
         assertNull(settings.currentZoneId)
         assertTrue(diagnostics.snapshot().contains("zone_pause_released reason=zone_removed"))
         assertTrue(diagnostics.snapshot().contains("zone_pause_inactive"))
+    }
+
+    @Test
+    fun `the heartbeat completes only after the zone check fix arrives`() {
+        val pending = TaskCompletionSource<Location>()
+        oneShotTask = { pending.task }
+        var completed = false
+
+        coordinator.onHeartbeat { completed = true }
+        idle()
+        assertFalse("must hold the wakeup until the fix arrives", completed)
+
+        pending.setResult(fixAt(52.01, accuracy = 30f))
+        idle()
+        assertTrue(completed)
+        assertNull(settings.currentZoneId)
+    }
+
+    @Test
+    fun `the heartbeat completes when the zone check fails`() {
+        oneShotTask = { Tasks.forException(IllegalStateException("no provider")) }
+        var completed = false
+
+        coordinator.onHeartbeat { completed = true }
+        idle()
+
+        assertTrue(completed)
+        assertEquals("home", settings.currentZoneId)
+    }
+
+    @Test
+    fun `the heartbeat outside a zone completes immediately`() {
+        settings.currentZoneId = null
+        var completed = false
+
+        coordinator.onHeartbeat { completed = true }
+
+        assertTrue(completed)
+    }
+
+    @Test
+    fun `the heartbeat alarm wakes the device`() {
+        val alarms = shadowOf(context.getSystemService(AlarmManager::class.java)).scheduledAlarms
+        val heartbeat = alarms.single {
+            shadowOf(it.operation).savedIntent.action == LocationReceiver.ACTION_HEARTBEAT
+        }
+
+        assertEquals(AlarmManager.ELAPSED_REALTIME_WAKEUP, heartbeat.type)
     }
 }
