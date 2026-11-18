@@ -52,11 +52,16 @@ class LocationTrackingService : Service() {
             (application as App).locationCoordinator.start()
         }
 
+    /**
+     * Only the user's stop action disables tracking (it stops the coordinator
+     * before stopping this service). Any other destruction keeps tracking
+     * enabled and falls back to PendingIntent delivery.
+     */
     override fun onDestroy() {
         (application as App).diagnostics.record("foreground_service_destroyed")
         val coordinator = (application as App).locationCoordinator
         coordinator.clearDirectLocationCallback()
-        coordinator.stop()
+        coordinator.ensureRegistered()
         super.onDestroy()
     }
 
