@@ -148,7 +148,7 @@ stateDiagram-v2
 
     Tracking --> EntryPending: geofence ENTER or DWELL
     EntryPending --> Paused: usable fix inside the zone
-    EntryPending --> Tracking: EXIT, zone removed, or 10-min window expired
+    EntryPending --> Tracking: EXIT, zone removed, geofencing off, or 10-min window expired
     EntryPending --> EntryPending: fix not usable yet
 
     Paused --> Paused: ENTER for another zone and fix proves the switch
@@ -156,6 +156,7 @@ stateDiagram-v2
     Paused --> Tracking: geofence EXIT
     Paused --> Tracking: heartbeat fix clearly outside the zone
     Paused --> Tracking: current zone removed from the zone list
+    Paused --> Tracking: geofencing turned off
 
     note right of EntryPending
       Tracking continues normally
@@ -273,7 +274,10 @@ check would wait in Doze for an unrelated wakeup, or the device would sleep
 before the fix was delivered.
 
 When a zone list update removes the current zone, tracking resumes immediately
-instead of waiting for the next heartbeat.
+instead of waiting for the next heartbeat. Turning geofencing off in settings
+also resumes tracking at once: it clears the current zone and any pending
+entry, removes the geofences and stops the zone subscription, and geofence
+ENTER events still in flight are ignored.
 
 ### Zone exit
 

@@ -96,7 +96,7 @@ class SettingsActivity : AppCompatActivity() {
                 LocationSettings.MINUTE_MS
         }
         binding.etGpsFixInterval.setText((settings.gpsFixIntervalMs / LocationSettings.MINUTE_MS).toString())
-        settings.geofencingEnabled = binding.swGeofencing.isChecked
+        (application as App).locationCoordinator.setGeofencingEnabled(binding.swGeofencing.isChecked)
     }
 
     companion object {

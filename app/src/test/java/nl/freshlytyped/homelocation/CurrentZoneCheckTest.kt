@@ -142,6 +142,29 @@ class CurrentZoneCheckTest {
     }
 
     @Test
+    fun `turning geofencing off ends the zone pause`() {
+        coordinator.setGeofencingEnabled(false)
+        idle()
+
+        assertNull(settings.currentZoneId)
+        assertFalse(settings.geofencingEnabled)
+        assertTrue(diagnostics.snapshot().contains("zone_pause_released reason=geofencing_disabled"))
+        assertTrue(diagnostics.snapshot().contains("zone_pause_inactive"))
+    }
+
+    @Test
+    fun `a zone entry with geofencing off does not pause`() {
+        coordinator.setGeofencingEnabled(false)
+        idle()
+
+        coordinator.onZoneEntered("home", fixAt(52.0, accuracy = 30f))
+        idle()
+
+        assertNull(settings.currentZoneId)
+        assertNull(coordinator.testPendingZoneEntryId)
+    }
+
+    @Test
     fun `the heartbeat completes only after the zone check fix arrives`() {
         val pending = TaskCompletionSource<Location>()
         oneShotTask = { pending.task }

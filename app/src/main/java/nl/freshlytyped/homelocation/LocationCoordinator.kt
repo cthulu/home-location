@@ -213,6 +213,31 @@ class LocationCoordinator(
         scheduleHeartbeat()
     }
 
+    /**
+     * Turning geofencing off must also end a zone pause: the current zone
+     * would otherwise keep tracking paused, and the still-registered
+     * geofences would keep pausing it on every ENTER.
+     */
+    fun setGeofencingEnabled(enabled: Boolean) {
+        if (settings.geofencingEnabled == enabled) return
+        settings.geofencingEnabled = enabled
+        if (!settings.trackingEnabled) return
+        if (enabled) {
+            zoneManager.registerGeofences()
+            zonesSubscriber.start()
+            return
+        }
+        clearPendingZoneEntry()
+        zonesSubscriber.stop()
+        zoneManager.removeGeofences()
+        if (settings.currentZoneId != null) {
+            settings.currentZoneId = null
+            diagnostics.record("zone_pause_released reason=geofencing_disabled")
+            publishUiState()
+        }
+        ensureRegistered()
+    }
+
     fun refreshZones() {
         if (!settings.geofencingEnabled) return
         zonesSubscriber.start()
@@ -853,6 +878,11 @@ class LocationCoordinator(
      * backstop: it expires the entry if no usable fix arrives.
      */
     fun onZoneEntered(zoneId: String, triggeringLocation: Location? = null) {
+        if (!settings.geofencingEnabled) {
+            // An event already in flight when geofencing was turned off.
+            diagnostics.record("zone_enter_ignored id=$zoneId reason=geofencing_disabled")
+            return
+        }
         val now = clock()
         if (settings.currentZoneId == zoneId) {
             // The engine re-fires ENTER for the zone we are already in (the
