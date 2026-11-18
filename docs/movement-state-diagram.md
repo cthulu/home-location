@@ -2,61 +2,50 @@
 
 ![Movement detection state diagram](movement-state-diagram.png)
 
-The movement controller has two persisted states. Location updates, activity
-recognition, Wi-Fi changes, and the burst-expiry alarm are the inputs. The
-foreground service does not change the state machine; it owns delivery of
-location callbacks while the coordinator applies these transitions.
+The movement controller has two persisted states. Its inputs are the
+continuous location updates, GPS and verification one-shot fixes, activity
+recognition, Wi-Fi loss, and the burst-expiry alarm. The foreground service
+does not change the state machine; it owns delivery of location callbacks while
+the coordinator applies these transitions.
+
+Zone pause and roaming pause are separate from the movement state: while either
+is active no input reaches the state machine and the movement state is kept as
+it was (see "Zone pause").
 
 ```mermaid
 stateDiagram-v2
     [*] --> STATIONARY
 
     STATIONARY --> MOVING: moving activity confidence >= 70%
-    STATIONARY --> MOVING: reliable fix distance >= threshold
-    STATIONARY --> STATIONARY: Wi-Fi lost / balanced verification
+    STATIONARY --> MOVING: reliable fixes accumulate >= threshold
     STATIONARY --> MOVING: coarse fix beyond threshold plus its accuracy
-    STATIONARY --> STATIONARY: coarse fix within threshold plus its accuracy
-
-    MOVING --> MOVING: moving activity / refresh evidence time
-    MOVING --> MOVING: moving fix / refresh evidence time
-    MOVING --> MOVING: Wi-Fi lost / refresh evidence time
-
-    MOVING --> STATIONARY: burst alarm and no evidence
-    MOVING --> STATIONARY: service start and moving state > 15 min
-    MOVING --> STATIONARY: runtime 15-minute moving limit
-    STATIONARY --> MOVING: location distance threshold during activity cooldown
-
+    STATIONARY --> STATIONARY: Wi-Fi lost / balanced verification fix
     STATIONARY --> STATIONARY: still activity
     STATIONARY --> STATIONARY: fix below movement threshold
+    STATIONARY --> STATIONARY: moving activity during activity cooldown
+
+    MOVING --> MOVING: moving activity / refresh evidence time
+    MOVING --> MOVING: reliable fixes accumulate >= threshold / refresh evidence time
+    MOVING --> MOVING: coarse fix beyond threshold plus its accuracy / refresh evidence time
+    MOVING --> MOVING: GPS fix interval elapsed / GPS one-shot fix
+
+    MOVING --> STATIONARY: burst alarm and no evidence for 10 min
+    MOVING --> STATIONARY: still activity or reliable fix, and no evidence for 10 min
+    MOVING --> STATIONARY: 15-minute moving limit (starts activity cooldown)
+    MOVING --> STATIONARY: tracking start and moving state > 15 min
 
     note right of MOVING
       Balanced-power location request continues
       GPS one-shot fix on entry, then every 5 min
       (only with "High accuracy while moving")
       Without GPS: coarse fixes up to 200 m are published
+      Burst-expiry alarm is scheduled
       Periodic fallback is cancelled
     end note
 
     note right of STATIONARY
       Balanced-power location request
       Periodic fallback may be scheduled
-
-      Inside a known zone: tracking is paused entirely.
-      Location requests, activity recognition, and publishing
-      are stopped. Geofence monitoring, the PubNub subscription
-      and the heartbeat remain active — the heartbeat re-registers
-      the never-expiring geofences so zone exit survives process
-      death and geofence loss. Geofence EXIT resumes normal
-      tracking. Enter events are debounced to suppress flapping,
-      and geofences also use a dwell delay and an initial ENTER
-      trigger so a device booted inside a zone pauses immediately.
-      An ENTER is confirmed against a location fix (see
-      "Zone entry confirmation") before tracking pauses.
-      While a zone is current, an ENTER for a *different* zone can confirm a
-      zone switch from the event's triggering fix (see "Zone switch"), so a
-      stale pause resolves itself without waiting for an EXIT.
-      The heartbeat also checks one fix against the current zone and exits
-      it when the fix is clearly outside (see "Current zone check").
     end note
 ```
 
@@ -67,9 +56,10 @@ stateDiagram-v2
 The coordinator switches to `MOVING` when it receives one of these signals:
 
 - Activity recognition reports walking, running, cycling, on foot, or in a
-  vehicle with at least 70% confidence.
+  vehicle with at least 70% confidence, outside the activity cooldown.
 - Consecutive location fixes with accuracy of 50 m or better accumulate at
-  least the configured movement distance.
+  least the configured movement distance (100 m by default). Segments shorter
+  than 5 m are treated as jitter and not accumulated.
 - A coarse fix (accuracy worse than 50 m) lies at least the configured
   movement distance plus its own accuracy away from the last reliable fix.
 
@@ -77,12 +67,15 @@ Coarse fixes never accumulate distance and never replace the last reliable
 fix. Requiring the whole uncertainty circle to clear the threshold keeps
 coarse jitter around a stationary device from switching into moving mode,
 while still detecting travel when the balanced request only
-yields network fixes. Wi-Fi loss triggers only a balanced one-shot verification
-fix; it no longer switches state directly. The continuous scan defaults to a
-2-minute interval with batched delivery, similar to Home Assistant Companion's
-background cadence.
+yields network fixes. Without a last reliable fix a coarse fix is never
+evidence, so fixes from an approximate-only permission (about 2 km accuracy)
+cannot start moving mode; only activity recognition can. Wi-Fi loss triggers
+only a balanced one-shot verification fix; it no longer switches state
+directly. The continuous scan defaults to a 2-minute interval with batched
+delivery, similar to Home Assistant Companion's background cadence.
 
-The burst-expiry alarm is then scheduled.
+Entering `MOVING` clears the activity cooldown, schedules the burst-expiry
+alarm, cancels the periodic fallback, and requests a GPS fix when one is due.
 
 ### GPS while `MOVING`
 
@@ -90,32 +83,99 @@ The continuous location request is balanced power accuracy in both states, so
 GPS is never left running. When "High accuracy while moving" is enabled and
 fine location is granted, the coordinator takes a GPS one-shot fix (30 s
 timeout) on entering `MOVING` and then at most once per GPS fix interval
-(5 minutes by default, configurable in settings). The check runs on each
-continuous location callback, so it needs no alarm of its own; the effective
-interval is the configured one rounded up to the next callback. A GPS fix goes
-through the normal fix handling: it updates the last reliable fix and is
-published by the filter.
+(5 minutes by default, configurable from 1 to 30 minutes in settings). The
+interval also applies across `MOVING` sessions: re-entering `MOVING` within
+the interval of the last GPS request (for example right after the 15-minute
+limit) waits for the interval instead of taking a new fix. The check runs on
+each continuous location callback, so it needs no alarm of its own; the
+effective interval is the configured one rounded up to the next callback. A
+GPS fix goes through the normal fix handling: it updates the last reliable fix,
+counts as movement evidence when it covers the movement distance, and is
+published by the filter. A GPS request that returns nothing or fails is only
+recorded; the next one follows after the interval.
 
-When the switch is off, or only approximate location is granted, GPS is never
-used. While `MOVING`, coarse fixes are then published with an accuracy cap of
-200 m (or the configured publish cap if larger), and only when the distance
-from the last published position exceeds the fix's own accuracy, so coarse
-jitter is not reported as movement. In `STATIONARY` the normal 50 m publish
-cap applies either way.
+Two other one-shot fixes also use GPS when the switch is on: the fix requested
+when tracking starts, and the periodic fallback fix while `STATIONARY` (when
+the fallback is enabled). Wi-Fi loss, zone confirmation and the heartbeat's
+zone check always use balanced accuracy.
+
+When the switch is off, or fine location is not granted, GPS is never used.
+While `MOVING`, coarse fixes are then published with an accuracy cap of 200 m
+(or the configured publish cap if larger), and only when the distance from the
+last published position exceeds the fix's own accuracy, so coarse jitter is
+not reported as movement. Approximate-only fixes are coarser than this cap and
+are not published. In `STATIONARY` the normal 50 m publish cap applies either
+way. With the switch on, coarse fixes are not published: the GPS fixes are the
+reliable positions, so a trip where every GPS request fails publishes only
+network fixes of 50 m or better.
 
 ### `MOVING` to `STATIONARY`
 
-The coordinator returns to `STATIONARY` when the burst-expiry alarm fires and
-no recent movement evidence exists. A moving state that has survived a
-service restart for more than 15 minutes is also reset to stationary to avoid
-leaving moving mode (and its GPS fixes) active indefinitely.
+The coordinator returns to `STATIONARY` when no movement evidence has been
+seen for the burst duration (10 minutes by default). This is checked when the
+burst-expiry alarm fires, and also on each still activity and each reliable fix
+that does not cover the movement distance. Coarse fixes never end `MOVING`;
+the burst-expiry alarm does.
 
-During a running session, the same limit applies even when activity recognition
-continually reports movement. Activity-only movement evidence is ignored during
-the cooldown after that reset; a location fix crossing the configured distance
-threshold can resume moving mode. The fixes in the batch that triggers the reset
-are still evaluated and published, so a device that is really travelling
-resumes moving mode immediately instead of going dark for the cooldown.
+A moving state older than 15 minutes is also reset to stationary when tracking
+starts (for example after a service or process restart), so moving mode (and
+its GPS fixes) is never left active indefinitely.
+
+During a running session, the same 15-minute limit applies even when movement
+evidence keeps arriving. It is checked on each location callback, activity
+update and burst-expiry alarm, and the burst-expiry alarm is scheduled for no
+later than the limit. The reset starts a 15-minute activity cooldown in which
+moving activity is ignored; a location fix (reliable or coarse) that proves
+travel still resumes moving mode and clears the cooldown. The fixes in the
+batch that triggers the reset are still evaluated and published, so a device
+that is really travelling resumes moving mode immediately instead of going
+dark for the cooldown. On a long trip the state therefore restarts about every
+15 minutes.
+
+## Zone pause
+
+```mermaid
+stateDiagram-v2
+    [*] --> Tracking
+
+    Tracking --> EntryPending: geofence ENTER or DWELL
+    EntryPending --> Paused: usable fix inside the zone
+    EntryPending --> Tracking: EXIT, zone removed, or 10-min window expired
+    EntryPending --> EntryPending: fix not usable yet
+
+    Paused --> Paused: ENTER for another zone and fix proves the switch
+    Paused --> Paused: ENTER for the current zone (ignored)
+    Paused --> Tracking: geofence EXIT
+    Paused --> Tracking: heartbeat fix clearly outside the zone
+    Paused --> Tracking: current zone removed from the zone list
+
+    note right of EntryPending
+      Tracking continues normally
+      while the entry waits for a fix
+    end note
+
+    note right of Paused
+      No location request, activity recognition,
+      Wi-Fi callback, burst or fallback alarm.
+      Geofences, the PubNub subscription and the
+      30-minute wakeup heartbeat stay active.
+    end note
+```
+
+Inside a known zone tracking is paused entirely. Location requests, activity
+recognition, the Wi-Fi callback, the burst and periodic alarms, and publishing
+are stopped. Geofence monitoring, the PubNub subscription and the heartbeat
+remain active: the heartbeat re-registers the never-expiring geofences so zone
+exit survives process death and geofence loss. Geofences use a dwell delay and
+an initial ENTER trigger, so a device booted inside a zone pauses without
+waiting for a transition.
+
+The movement state is not changed by the pause. A device that enters a zone
+while `MOVING` stays `MOVING` for the whole stay. When tracking resumes, a
+moving state older than 15 minutes is reset by the 15-minute limit on the
+first location callback, activity update or burst-expiry alarm, which also
+starts the activity cooldown; a fix that proves travel still switches to
+`MOVING` straight away.
 
 ### Zone entry confirmation
 
@@ -183,7 +243,10 @@ device is really elsewhere but the current zone was never exited) resolves
 itself with the first usable fix that proves the device is in the other zone.
 Every rejected switch attempt is recorded in the diagnostics. A null triggering
 fix can confirm a switch only through the one-shot fallback, and an ENTER for
-the zone that is already current changes nothing.
+the zone that is already current changes nothing. An ENTER for another zone
+within the geofence debounce (3 minutes by default) of the last zone
+transition is ignored to suppress flapping; ENTERs while no zone is current
+are not debounced, since the entry confirmation already guards them.
 
 ### Current zone check
 
@@ -217,12 +280,15 @@ zone-aware accuracy cap applies, so a coarse fix still registers for a large
 zone. A stale exit (the device is not currently in the zone) is ignored, and an
 exit while a matching entry is still pending cancels that entry.
 
-### Registration rule
+## Registration rule
 
 Location and activity registrations are idempotent. A callback must process
-its fixes without re-registering either provider. Registration is only changed
-when the movement state or request configuration changes, or when registration
-health recovery is required.
+its fixes without re-registering either provider. The location request is the
+same in both movement states, so a state change never re-registers it. It is
+only changed when the scan interval or the delivery mode (direct callback from
+the foreground service or PendingIntent) changes, when a zone pause, roaming
+pause or the background-collection setting removes and restores it, or when
+registration health recovery is required.
 
 If movement-state logic changes, update this diagram and its transition details
 in the same change.

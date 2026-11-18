@@ -1,5 +1,13 @@
 # Geofencing Spec
 
+> **Status:** Phase 2 (pause mode) is implemented and replaced the Phase 1
+> low-frequency mode; the low-frequency request, its settings and its
+> diagnostics no longer exist. Zones pause all tracking after an entry is
+> confirmed against a location fix, and tracking resumes on a geofence EXIT, a
+> heartbeat fix clearly outside the zone, or removal of the zone. The battery
+> figures below predate periodic GPS while moving. Current behavior is
+> documented in `docs/movement-state-diagram.md`.
+
 ## Goal
 
 Reduce battery consumption by detecting when the device enters a known zone

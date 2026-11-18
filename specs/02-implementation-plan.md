@@ -15,8 +15,9 @@ Add settings for:
 - PubNub publish key, subscribe key, optional API key, and channel.
 - Tracking enabled state.
 - Background location collection enabled state (default enabled).
-- Background/stationary scan interval in seconds (30–600 seconds, default 60 seconds).
-- Precise versus balanced mode. Precise mode enables high-accuracy moving requests when fine permission is available; disabling it uses balanced power accuracy.
+- Continuous scan interval in seconds (30–600 seconds, default 120 seconds).
+- Precise versus balanced mode ("High accuracy while moving"). Precise mode enables periodic GPS one-shot fixes while moving when fine permission is available; disabling it never uses GPS and publishes coarse fixes up to 200 m while moving.
+- GPS fix interval while moving (1–30 minutes, default 5 minutes).
 - Minimum acceptable accuracy.
 - Minimum publish interval.
 - Minimum movement distance.
@@ -29,9 +30,10 @@ Do not store a Home Assistant access token in this app.
 - Register activity recognition while tracking is enabled and collection is allowed by the foreground/background policy.
 - Register a `ConnectivityManager.NetworkCallback` for Wi-Fi changes where appropriate.
 - Register a default-network callback and pause all collection and new publishing while cellular roaming is active.
-- On movement or Wi-Fi loss, request a precise fix when precise mode and fine permission are enabled; otherwise use balanced power accuracy.
-- Stop high-accuracy updates after a stationary timeout.
-- Retain a balanced fallback request using the configured 30–600 second background interval, subject to Android throttling.
+- On Wi-Fi loss, request a balanced verification fix and evaluate it as movement evidence.
+- While moving, request a GPS one-shot fix on entry and then once per GPS fix interval when precise mode and fine permission are enabled.
+- Leave the moving state after a stationary timeout or the 15-minute moving limit.
+- Keep one balanced continuous request at the configured 30–600 second interval in every movement state, subject to Android throttling.
 - When stationary fallback publishing is enabled, schedule an alarm at the configured fallback interval and request a one-shot fix for publication; do not rely solely on continuous location callbacks.
 - When background collection is disabled, keep registrations only while the app is foregrounded.
 
