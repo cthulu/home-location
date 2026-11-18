@@ -14,7 +14,8 @@ stateDiagram-v2
     STATIONARY --> MOVING: moving activity confidence >= 70%
     STATIONARY --> MOVING: reliable fix distance >= threshold
     STATIONARY --> STATIONARY: Wi-Fi lost / balanced verification
-    STATIONARY --> STATIONARY: fix rejected (accuracy worse than 50 m)
+    STATIONARY --> MOVING: coarse fix beyond threshold plus its accuracy
+    STATIONARY --> STATIONARY: coarse fix within threshold plus its accuracy
 
     MOVING --> MOVING: moving activity / refresh evidence time
     MOVING --> MOVING: moving fix / refresh evidence time
@@ -66,11 +67,15 @@ The coordinator switches to `MOVING` when it receives one of these signals:
   vehicle with at least 70% confidence.
 - Consecutive location fixes with accuracy of 50 m or better accumulate at
   least the configured movement distance.
+- A coarse fix (accuracy worse than 50 m) lies at least the configured
+  movement distance plus its own accuracy away from the last reliable fix.
 
-Fixes with worse accuracy are discarded before they reach the state machine
-and can never switch the device into high-accuracy mode. Wi-Fi loss triggers
-only a balanced one-shot verification fix; it no longer switches state
-directly. The stationary scan defaults to a 2-minute interval with batched
+Coarse fixes never accumulate distance, never replace the last reliable fix
+and are never published. Requiring the whole uncertainty circle to clear the
+threshold keeps coarse jitter around a stationary device from switching into
+high-accuracy mode, while still detecting travel when the balanced request only
+yields network fixes. Wi-Fi loss triggers only a balanced one-shot verification
+fix; it no longer switches state directly. The stationary scan defaults to a 2-minute interval with batched
 delivery, similar to Home Assistant Companion's background cadence.
 
 The high-accuracy request is then registered and the burst-expiry alarm is

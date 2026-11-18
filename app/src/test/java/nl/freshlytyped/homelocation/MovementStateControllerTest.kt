@@ -193,6 +193,37 @@ class MovementStateControllerTest {
         assertEquals(0f, next, 0.001f)
     }
 
+    // --- Coarse fixes ---
+
+    private fun observeCoarse(state: MovementState, movedDegrees: Double, accuracy: Float, hasLastKnown: Boolean = true) =
+        controller.observeCoarseFix(LocationFix(52.0 + movedDegrees, 5.0, accuracy, now), state, 52.0, 5.0, hasLastKnown)
+
+    @Test
+    fun `coarse fix beyond threshold plus accuracy goes moving`() {
+        // ~334 m away with 200 m accuracy: at least 134 m of travel is certain.
+        val decision = observeCoarse(MovementState.STATIONARY, movedDegrees = 0.003, accuracy = 200f)
+        assertTrue(decision is MovementDecision.ToMoving)
+    }
+
+    @Test
+    fun `coarse jitter within its accuracy stays stationary`() {
+        // The Razr case: a 129 m fix ~167 m from the last reliable position.
+        val decision = observeCoarse(MovementState.STATIONARY, movedDegrees = 0.0015, accuracy = 129f)
+        assertEquals(MovementDecision.NoChange(), decision)
+    }
+
+    @Test
+    fun `coarse fix while moving counts as evidence`() {
+        val decision = observeCoarse(MovementState.MOVING, movedDegrees = 0.003, accuracy = 200f)
+        assertEquals(MovementDecision.NoChange(isEvidence = true), decision)
+    }
+
+    @Test
+    fun `coarse fix without a reliable baseline changes nothing`() {
+        val decision = observeCoarse(MovementState.STATIONARY, movedDegrees = 0.1, accuracy = 200f, hasLastKnown = false)
+        assertEquals(MovementDecision.NoChange(), decision)
+    }
+
     // --- Activity type classification ---
 
     @Test

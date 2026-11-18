@@ -420,10 +420,7 @@ class LocationCoordinator(
         evaluatePendingZoneEntry(fix, now)
         if (zonePaused) return // the fix confirmed a zone entry; tracking is paused
         if (!controller.isReliableFix(fix)) {
-            diagnosticsRecord(
-                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
-                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
-            )
+            handleCoarseFix(fix, now)
             return
         }
 
@@ -495,6 +492,32 @@ class LocationCoordinator(
                 Log.d(TAG, "Fix not published: ${result.reason}")
             }
         }
+    }
+
+    /**
+     * A coarse fix never moves the reliable baseline and is never published,
+     * but one clearly far from the last reliable position is movement
+     * evidence, so travel is detected when only network fixes arrive.
+     */
+    private fun handleCoarseFix(fix: LocationFix, now: Long) {
+        val decision = controller.observeCoarseFix(
+            fix,
+            settings.movementState,
+            settings.lastKnownLat,
+            settings.lastKnownLon,
+            settings.hasLastKnown()
+        )
+        if (!decision.isEvidence) {
+            diagnosticsRecord(
+                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
+                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
+            )
+            return
+        }
+        diagnosticsRecord("location_fix coarse_movement_evidence accuracy=${fix.accuracyMeters}")
+        settings.lastMovementEvidenceTimeMs = now
+        settings.accumulatedDistanceMeters = 0f
+        applyStateChange(decision)
     }
 
     private fun diagnosticsRecord(event: String) {
