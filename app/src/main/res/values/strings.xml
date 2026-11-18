@@ -11,7 +11,7 @@
     <string name="tracking_on">Tracking is on</string>
     <string name="movement_state">Movement state: %1$s</string>
     <string name="state_stationary">stationary</string>
-    <string name="state_moving">moving (high accuracy)</string>
+    <string name="state_moving">moving</string>
     <string name="current_zone">Current zone: %1$s</string>
     <string name="outside_known_zones">Current zone: outside known zones</string>
     <string name="last_published_never">Last published: never</string>
