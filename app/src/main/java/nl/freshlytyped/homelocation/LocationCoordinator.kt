@@ -844,6 +844,8 @@ class LocationCoordinator(
 
     fun onBurstEnd() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
+        // A leftover alarm from an earlier MOVING session must not reschedule itself.
+        if (settings.movementState != MovementState.MOVING) return
         // The cap must win even when fixes keep arriving as movement evidence.
         if (enforceHighAccuracyLimit(clock())) return
         val decision = controller.burstExpired(
@@ -1301,6 +1303,7 @@ class LocationCoordinator(
             settings.movingStartedTimeMs = 0L
             settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
             settings.accumulatedDistanceMeters = 0f
+            cancelBurstAlarm()
             diagnostics.record("stale_moving_state_reset")
         }
     }

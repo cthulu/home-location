@@ -1,10 +1,12 @@
 package nl.freshlytyped.homelocation
 
+import android.app.AlarmManager
 import android.content.Context
 import android.location.Location
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -13,6 +15,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -24,6 +27,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class MovementCooldownTest {
 
+    private lateinit var context: Context
     private lateinit var settings: LocationSettings
     private lateinit var coordinator: LocationCoordinator
 
@@ -31,7 +35,7 @@ class MovementCooldownTest {
 
     @Before
     fun setup() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
+        context = ApplicationProvider.getApplicationContext()
         settings = LocationSettings(context)
         settings.resetState()
         settings.publishKey = "pub"
@@ -109,5 +113,32 @@ class MovementCooldownTest {
 
         assertEquals(MovementState.STATIONARY, settings.movementState)
         assertTrue(settings.activityCooldownUntilMs > clockValue)
+    }
+
+    private fun burstAlarmScheduled(): Boolean =
+        shadowOf(context.getSystemService(AlarmManager::class.java)).scheduledAlarms
+            .any { shadowOf(it.operation).savedIntent.action == LocationReceiver.ACTION_BURST_END }
+
+    @Test
+    fun `a leftover burst alarm while stationary is not rescheduled`() {
+        settings.movementState = MovementState.STATIONARY
+
+        coordinator.onBurstEnd()
+
+        assertFalse(burstAlarmScheduled())
+    }
+
+    @Test
+    fun `resetting a stale moving state on start cancels the burst alarm`() {
+        settings.movementState = MovementState.MOVING
+        settings.movingStartedTimeMs = clockValue - 5 * 60_000L
+        coordinator.ensureRegistered()
+        assertTrue(burstAlarmScheduled())
+
+        clockValue += 20 * 60_000L
+        coordinator.start()
+
+        assertEquals(MovementState.STATIONARY, settings.movementState)
+        assertFalse(burstAlarmScheduled())
     }
 }
