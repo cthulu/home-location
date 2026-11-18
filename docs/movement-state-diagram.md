@@ -1,7 +1,5 @@
 # Movement detection state diagram
 
-![Movement detection state diagram](movement-state-diagram.png)
-
 The movement controller has two persisted states. Its inputs are the
 continuous location updates, GPS and verification one-shot fixes, activity
 recognition, Wi-Fi loss, and the burst-expiry alarm. The foreground service
