@@ -9,8 +9,8 @@ does not change the state machine; it owns delivery of location callbacks while
 the coordinator applies these transitions.
 
 Zone pause and roaming pause are separate from the movement state: while either
-is active no input reaches the state machine and the movement state is kept as
-it was (see "Zone pause").
+is active no input reaches the state machine. A confirmed zone entry ends
+`MOVING`; a roaming pause keeps the movement state as it was (see "Zone pause").
 
 ```mermaid
 stateDiagram-v2
@@ -33,6 +33,7 @@ stateDiagram-v2
     MOVING --> STATIONARY: still activity or reliable fix, and no evidence for 10 min
     MOVING --> STATIONARY: 15-minute moving limit (starts activity cooldown)
     MOVING --> STATIONARY: tracking start and moving state > 15 min
+    MOVING --> STATIONARY: zone entry confirmed (no activity cooldown)
 
     note right of MOVING
       Balanced-power location request continues
@@ -177,12 +178,10 @@ exit survives process death and geofence loss. Geofences use a dwell delay and
 an initial ENTER trigger, so a device booted inside a zone pauses without
 waiting for a transition.
 
-The movement state is not changed by the pause. A device that enters a zone
-while `MOVING` stays `MOVING` for the whole stay. When tracking resumes, a
-moving state older than 15 minutes is reset by the 15-minute limit on the
-first location callback, activity update or burst-expiry alarm, which also
-starts the activity cooldown; a fix that proves travel still switches to
-`MOVING` straight away.
+Arriving in a zone ends the trip: when an entry or zone switch is confirmed
+while `MOVING`, the state switches to `STATIONARY` before tracking pauses.
+Unlike the 15-minute limit this starts no activity cooldown, so moving activity
+switches to `MOVING` again as soon as tracking resumes after leaving the zone.
 
 ### Zone entry confirmation
 

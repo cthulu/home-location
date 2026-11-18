@@ -1155,6 +1155,12 @@ class LocationCoordinator(
         diagnostics.record("zone_entered id=$zoneId")
         Log.i(TAG, "Zone entered: $zoneId — pausing tracking")
         if (settings.trackingEnabled) {
+            // Arriving ends the trip; without this the state would stay MOVING
+            // for the whole stay and hit the moving limit on departure.
+            if (settings.movementState == MovementState.MOVING) {
+                diagnostics.record("state_transition moving_to_stationary reason=zone_entered")
+                applyStateChange(MovementDecision.ToStationary(MovementState.MOVING))
+            }
             zonePaused = true
             removeLocationRegistration()
             removeActivityRegistration()

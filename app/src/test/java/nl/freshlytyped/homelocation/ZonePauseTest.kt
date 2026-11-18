@@ -1,13 +1,16 @@
 package nl.freshlytyped.homelocation
 
+import android.app.AlarmManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
@@ -55,6 +58,21 @@ class ZonePauseTest {
 
         assertEquals("home", settings.currentZoneId)
         assertEquals(1_000L, settings.lastZoneTransitionMs)
+    }
+
+    @Test
+    fun `entering a zone while moving ends the trip without an activity cooldown`() {
+        settings.trackingEnabled = true
+        settings.movementState = MovementState.MOVING
+        settings.movingStartedTimeMs = clockValue
+        coordinator.ensureRegistered()
+
+        coordinator.onZoneEntered("home")
+
+        assertEquals(MovementState.STATIONARY, settings.movementState)
+        assertEquals(0L, settings.activityCooldownUntilMs)
+        val alarms = shadowOf(context.getSystemService(AlarmManager::class.java)).scheduledAlarms
+        assertTrue(alarms.none { shadowOf(it.operation).savedIntent.action == LocationReceiver.ACTION_BURST_END })
     }
 
     @Test
@@ -172,10 +190,10 @@ class ZonePauseTest {
     @Test
     fun `burst end does not revert state when zone paused`() {
         settings.trackingEnabled = true
-        settings.movementState = MovementState.MOVING
-        settings.lastMovementEvidenceTimeMs = 0L
         clockValue = 1_000L
         coordinator.onZoneEntered("home")
+        settings.movementState = MovementState.MOVING
+        settings.lastMovementEvidenceTimeMs = 0L
 
         // Simulate burst end - it should be skipped
         clockValue = 2_000L
