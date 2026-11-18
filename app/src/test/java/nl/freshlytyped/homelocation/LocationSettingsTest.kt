@@ -85,6 +85,7 @@ class LocationSettingsTest {
         settings.movementState = MovementState.MOVING
         settings.lastKnownLat = 52.0
         settings.lastKnownTimeMs = 42L
+        settings.lastKnownAccuracyMeters = 300f
         settings.lastPublishedTimeMs = 41L
         settings.lastPublishedLat = 52.0
         settings.lastPublishedAccuracyMeters = 12f
@@ -95,6 +96,7 @@ class LocationSettingsTest {
 
         assertEquals(MovementState.STATIONARY, settings.movementState)
         assertFalse(settings.hasLastKnown())
+        assertEquals(0f, settings.lastKnownAccuracyMeters)
         assertFalse(settings.hasLastPublished())
         assertEquals(0f, settings.accumulatedDistanceMeters)
         assertEquals(0L, settings.lastMovementEvidenceTimeMs)

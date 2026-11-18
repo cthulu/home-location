@@ -61,17 +61,24 @@ The coordinator switches to `MOVING` when it receives one of these signals:
   least the configured movement distance (100 m by default). Segments shorter
   than 5 m are treated as jitter and not accumulated.
 - A coarse fix (accuracy worse than 50 m) lies at least the configured
-  movement distance plus its own accuracy away from the last reliable fix.
+  movement distance plus both its own accuracy and the reference fix's
+  accuracy away from the reference fix.
 
-Coarse fixes never accumulate distance and never replace the last reliable
-fix. Requiring the whole uncertainty circle to clear the threshold keeps
-coarse jitter around a stationary device from switching into moving mode,
-while still detecting travel when the balanced request only
-yields network fixes. Without a last reliable fix a coarse fix is never
-evidence, so fixes from an approximate-only permission (about 2 km accuracy)
-cannot start moving mode; only activity recognition can. Wi-Fi loss triggers
-only a balanced one-shot verification fix; it no longer switches state
-directly. The continuous scan defaults to a 2-minute interval with batched
+The reference fix is the last fix that moved the position: every reliable fix,
+and a coarse fix only when it counts as movement (or when there is no
+reference yet). Coarse fixes never accumulate distance. Requiring both
+uncertainty circles to clear the threshold keeps coarse jitter around a
+stationary device from switching into moving mode, while still detecting
+travel when the balanced request only yields network fixes. Because a coarse
+fix that proves travel becomes the reference, coarse fixes at the destination
+are compared with the arrival position rather than the trip's start, so they
+stop counting as movement and `MOVING` ends. A reliable fix that follows a
+coarse reference only re-anchors the position; it does not accumulate distance,
+so the coarse fix's error is not counted as travel. With an approximate-only
+permission (about 2 km accuracy) moving mode starts only after a jump of
+roughly 4 km plus the movement distance, or from activity recognition. Wi-Fi
+loss triggers only a balanced one-shot verification fix; it no longer switches
+state directly. The continuous scan defaults to a 2-minute interval with batched
 delivery, similar to Home Assistant Companion's background cadence.
 
 Entering `MOVING` clears the activity cooldown, schedules the burst-expiry
@@ -89,7 +96,7 @@ the interval of the last GPS request (for example right after the 15-minute
 limit) waits for the interval instead of taking a new fix. The check runs on
 each continuous location callback, so it needs no alarm of its own; the
 effective interval is the configured one rounded up to the next callback. A
-GPS fix goes through the normal fix handling: it updates the last reliable fix,
+GPS fix goes through the normal fix handling: it becomes the reference fix,
 counts as movement evidence when it covers the movement distance, and is
 published by the filter. A GPS request that returns nothing or fails is only
 recorded; the next one follows after the interval.

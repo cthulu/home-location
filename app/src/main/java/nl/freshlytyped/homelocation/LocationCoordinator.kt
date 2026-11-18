@@ -497,13 +497,15 @@ class LocationCoordinator(
 
         // The high-accuracy cooldown only silences activity recognition: a fix
         // that accumulates the movement distance is real travel and resumes
-        // moving mode.
+        // moving mode. After a coarse reference the fix only re-anchors, so the
+        // coarse fix's error is not counted as travel.
+        val reliableReference = hasReliableReference()
         val decision = controller.observe(
             MovementEvidence.Fix(fix),
             settings.movementState,
             settings.lastKnownLat,
             settings.lastKnownLon,
-            settings.hasLastKnown(),
+            reliableReference,
             settings.accumulatedDistanceMeters,
             settings.lastMovementEvidenceTimeMs,
             now
@@ -516,14 +518,12 @@ class LocationCoordinator(
             settings.accumulatedDistanceMeters = controller.nextAccumulatedMeters(
                 settings.lastKnownLat,
                 settings.lastKnownLon,
-                settings.hasLastKnown(),
+                reliableReference,
                 settings.accumulatedDistanceMeters,
                 fix
             )
         }
-        settings.lastKnownLat = fix.latitude
-        settings.lastKnownLon = fix.longitude
-        settings.lastKnownTimeMs = fix.timeMs
+        updateReference(fix)
 
         applyStateChange(decision)
 
@@ -540,9 +540,11 @@ class LocationCoordinator(
     }
 
     /**
-     * A coarse fix never moves the reliable baseline and is never published,
-     * but one clearly far from the last reliable position is movement
-     * evidence, so travel is detected when only network fixes arrive.
+     * A coarse fix clearly far from the reference position is movement
+     * evidence, so travel is detected when only network fixes arrive. Such a
+     * fix becomes the reference, so the next fix is compared with where the
+     * device is now rather than where the trip started; jitter around the
+     * reference leaves it in place.
      */
     private fun handleCoarseFix(fix: LocationFix, now: Long) {
         val decision = controller.observeCoarseFix(
@@ -550,8 +552,10 @@ class LocationCoordinator(
             settings.movementState,
             settings.lastKnownLat,
             settings.lastKnownLon,
+            settings.lastKnownAccuracyMeters,
             settings.hasLastKnown()
         )
+        if (decision.isEvidence || !settings.hasLastKnown()) updateReference(fix)
         if (decision.isEvidence) {
             diagnosticsRecord("location_fix coarse_movement_evidence accuracy=${fix.accuracyMeters}")
             settings.lastMovementEvidenceTimeMs = now
@@ -566,6 +570,16 @@ class LocationCoordinator(
         if (settings.movementState == MovementState.MOVING && !gpsAllowed()) {
             publishCoarseFix(fix, now)
         }
+    }
+
+    private fun hasReliableReference(): Boolean = settings.hasLastKnown() &&
+        settings.lastKnownAccuracyMeters <= MovementStateController.MOVEMENT_MAX_ACCURACY_METERS
+
+    private fun updateReference(fix: LocationFix) {
+        settings.lastKnownLat = fix.latitude
+        settings.lastKnownLon = fix.longitude
+        settings.lastKnownTimeMs = fix.timeMs
+        settings.lastKnownAccuracyMeters = fix.accuracyMeters
     }
 
     /**

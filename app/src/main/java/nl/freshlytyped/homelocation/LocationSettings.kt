@@ -37,6 +37,7 @@ class LocationSettings(context: Context) {
         private const val KEY_LAST_KNOWN_LAT = "last_known_lat"
         private const val KEY_LAST_KNOWN_LON = "last_known_lon"
         private const val KEY_LAST_KNOWN_TIME = "last_known_time"
+        private const val KEY_LAST_KNOWN_ACCURACY = "last_known_accuracy_meters"
         private const val KEY_LAST_PUBLISHED_LAT = "last_published_lat"
         private const val KEY_LAST_PUBLISHED_LON = "last_published_lon"
         private const val KEY_LAST_PUBLISHED_TIME = "last_published_time"
@@ -171,6 +172,11 @@ class LocationSettings(context: Context) {
         get() = prefs.getLong(KEY_LAST_KNOWN_TIME, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_KNOWN_TIME, value).apply()
 
+    /** Accuracy of the last known fix; 0 for entries saved before it was stored. */
+    var lastKnownAccuracyMeters: Float
+        get() = prefs.getFloat(KEY_LAST_KNOWN_ACCURACY, 0f)
+        set(value) = prefs.edit().putFloat(KEY_LAST_KNOWN_ACCURACY, value).apply()
+
     var lastPublishedLat: Double
         get() = prefs.getLong(KEY_LAST_PUBLISHED_LAT, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_PUBLISHED_LAT, (value * 1e7).toLong()).apply()
@@ -273,6 +279,7 @@ class LocationSettings(context: Context) {
             .putLong(KEY_LAST_KNOWN_TIME, 0L)
             .putLong(KEY_LAST_KNOWN_LAT, 0L)
             .putLong(KEY_LAST_KNOWN_LON, 0L)
+            .putFloat(KEY_LAST_KNOWN_ACCURACY, 0f)
             .putLong(KEY_LAST_PUBLISHED_TIME, 0L)
             .putLong(KEY_LAST_PUBLISHED_LAT, 0L)
             .putLong(KEY_LAST_PUBLISHED_LON, 0L)

@@ -87,7 +87,8 @@ class MovingGpsTest {
 
     @Test
     fun `entering moving takes one high-accuracy GPS fix and publishes it`() {
-        gpsLocation = fixAt(52.0105, accuracy = 8f)
+        // The GPS fix arrives after the coarse fix that triggered it.
+        gpsLocation = fixAt(52.0105, accuracy = 8f).apply { time = clockValue + 10_000L }
 
         // ~1.1 km away with 300 m accuracy: coarse evidence switches to moving.
         update(52.01, accuracy = 300f)

@@ -105,21 +105,23 @@ class MovementStateController(private val config: MovementConfig) {
     }
 
     /**
-     * A fix too coarse to accumulate distance still proves travel when its
-     * whole uncertainty circle lies at least the movement distance away from
-     * the last reliable position. Jitter of a coarse fix around a stationary
-     * device stays within its accuracy, so it never qualifies.
+     * A fix too coarse to accumulate distance still proves travel when the
+     * uncertainty of both it and the reference fix leaves at least the
+     * movement distance between them. Jitter of a coarse fix around a
+     * stationary device stays within those accuracies, so it never qualifies.
      */
     fun observeCoarseFix(
         fix: LocationFix,
         state: MovementState,
-        lastKnownLat: Double,
-        lastKnownLon: Double,
-        hasLastKnown: Boolean
+        referenceLat: Double,
+        referenceLon: Double,
+        referenceAccuracyMeters: Float,
+        hasReference: Boolean
     ): MovementDecision {
-        if (!hasLastKnown || !fix.accuracyMeters.isFinite()) return MovementDecision.NoChange()
-        val distance = GeoMath.distanceMeters(lastKnownLat, lastKnownLon, fix.latitude, fix.longitude)
-        return if (distance - fix.accuracyMeters >= config.movementDetectionDistanceMeters) {
+        if (!hasReference || !fix.accuracyMeters.isFinite()) return MovementDecision.NoChange()
+        val distance = GeoMath.distanceMeters(referenceLat, referenceLon, fix.latitude, fix.longitude)
+        val uncertainty = fix.accuracyMeters + referenceAccuracyMeters
+        return if (distance - uncertainty >= config.movementDetectionDistanceMeters) {
             markEvidence(state)
         } else {
             MovementDecision.NoChange()

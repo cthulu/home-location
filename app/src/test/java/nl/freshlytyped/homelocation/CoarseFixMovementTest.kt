@@ -16,7 +16,8 @@ import org.robolectric.annotation.Config
 
 /**
  * Balanced requests often deliver only coarse network fixes. Those must still
- * detect clear travel, without moving the reliable baseline or being published.
+ * detect clear travel without being published while stationary, and must stop
+ * counting as travel once the device has arrived.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -66,9 +67,52 @@ class CoarseFixMovementTest {
         coordinator.onLocationUpdates(listOf(fixAt(52.01, accuracy = 300f)))
 
         assertEquals(MovementState.MOVING, settings.movementState)
-        // The coarse fix neither replaces the baseline nor gets published.
-        assertEquals(52.0, settings.lastKnownLat, 1e-9)
+        // The coarse fix becomes the reference, but is not published.
+        assertEquals(52.01, settings.lastKnownLat, 1e-9)
+        assertEquals(300f, settings.lastKnownAccuracyMeters)
         assertEquals(0L, settings.lastPublishedTimeMs)
+    }
+
+    @Test
+    fun `coarse jitter after arriving no longer counts as travel`() {
+        coordinator.onLocationUpdates(listOf(fixAt(52.01, accuracy = 300f)))
+        val arrivedEvidenceMs = settings.lastMovementEvidenceTimeMs
+
+        // ~167 m from the arrival fix, well within both accuracies.
+        clockValue += 2 * 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.0115, accuracy = 300f)))
+
+        assertEquals(arrivedEvidenceMs, settings.lastMovementEvidenceTimeMs)
+        assertEquals(52.01, settings.lastKnownLat, 1e-9)
+    }
+
+    @Test
+    fun `a reliable fix after a coarse reference re-anchors without counting travel`() {
+        settings.lastKnownAccuracyMeters = 300f
+
+        // ~222 m from the coarse reference: travel only within its error.
+        coordinator.onLocationUpdates(listOf(fixAt(52.002, accuracy = 10f)))
+
+        assertEquals(MovementState.STATIONARY, settings.movementState)
+        assertEquals(52.002, settings.lastKnownLat, 1e-9)
+        assertEquals(10f, settings.lastKnownAccuracyMeters)
+        assertEquals(0f, settings.accumulatedDistanceMeters)
+    }
+
+    @Test
+    fun `the first coarse fix becomes the reference when there is none`() {
+        settings.resetState()
+        settings.trackingEnabled = true
+
+        // Approximate-only fixes: about 2 km accuracy.
+        coordinator.onLocationUpdates(listOf(fixAt(52.0, accuracy = 2000f)))
+        assertEquals(MovementState.STATIONARY, settings.movementState)
+        assertEquals(2000f, settings.lastKnownAccuracyMeters)
+
+        // ~5.6 km away: clear of both 2 km accuracies.
+        clockValue += 2 * 60_000L
+        coordinator.onLocationUpdates(listOf(fixAt(52.05, accuracy = 2000f)))
+        assertEquals(MovementState.MOVING, settings.movementState)
     }
 
     @Test
