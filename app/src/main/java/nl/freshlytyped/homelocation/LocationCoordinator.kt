@@ -458,24 +458,20 @@ class LocationCoordinator(
      * Periodic stationary publish. Driven by an alarm rather than by incoming
      * fixes: a stationary device (or an emulator with a static mock location)
      * may not produce new fixes on its own, so the cadence would never fire.
+     * The fix is balanced (GPS is only used while moving) and goes through
+     * the normal fix handling, so it also counts for movement detection.
      */
     fun onPeriodicPublish() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
         if (settings.movementState != MovementState.STATIONARY || !settings.periodicFallbackEnabled) {
             return
         }
-        oneShotLocationRequest(settings.periodicFallbackIntervalMs)
+        oneShotLocationRequest(PERIODIC_FIX_TIMEOUT_MS, forceBalanced = true)
             .addOnSuccessListener { location ->
                 if (location == null) {
                     Log.w(TAG, "Periodic publish: no location available")
-                } else {
-                    val fix = location.toFix()
-                    val result = filter.evaluate(fix, clock(), buildFilterContext())
-                    if (result is LocationDecision.Accept) {
-                        publish(fix)
-                    } else if (result is LocationDecision.Reject) {
-                        Log.d(TAG, "Periodic publish skipped: ${result.reason}")
-                    }
+                } else if (settings.trackingEnabled && !roamingPaused && !zonePaused) {
+                    handleFix(location.toFix(), clock())
                 }
                 if (settings.trackingEnabled) schedulePeriodicPublish()
             }
@@ -1619,6 +1615,7 @@ class LocationCoordinator(
         private const val ZONE_VERIFY_MAX_AGE_MS = 2 * 60_000L
 
         private const val GPS_FIX_TIMEOUT_MS = 30_000L
+        private const val PERIODIC_FIX_TIMEOUT_MS = 30_000L
 
         /** Accuracy cap for network fixes published while moving without GPS. */
         private const val COARSE_PUBLISH_MAX_ACCURACY_METERS = 200f

@@ -102,10 +102,11 @@ counts as movement evidence when it covers the movement distance, and is
 published by the filter. A GPS request that returns nothing or fails is only
 recorded; the next one follows after the interval.
 
-Two other one-shot fixes also use GPS when the switch is on: the fix requested
-when tracking starts, and the periodic fallback fix while `STATIONARY` (when
-the fallback is enabled). Wi-Fi loss, zone confirmation and the heartbeat's
-zone check always use balanced accuracy.
+Outside `MOVING`, only the fix requested when tracking starts uses GPS when the
+switch is on. The periodic fallback fix while `STATIONARY` (when the fallback
+is enabled), Wi-Fi loss, zone confirmation and the heartbeat's zone check
+always use balanced accuracy. The fallback and Wi-Fi loss fixes go through the
+normal fix handling, so they can also switch to `MOVING`.
 
 When the switch is off, or fine location is not granted, GPS is never used.
 While `MOVING`, coarse fixes are then published with an accuracy cap of 200 m
