@@ -13,5 +13,11 @@ data class LocationFix(
     val timeMs: Long
 )
 
+/** A fix awaiting publish, with the accuracy cap it was accepted under. */
+data class PendingPublish(
+    val fix: LocationFix,
+    val accuracyCapMeters: Float
+)
+
 fun Location.toFix(): LocationFix =
     LocationFix(latitude, longitude, accuracy, time)

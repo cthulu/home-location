@@ -2,7 +2,7 @@
 Home Location is an Android app that:
 - tracks device movement (activity recognition, Wi-Fi changes, travel distance)
 - publishes GPS coordinates to PubNub for a Home Assistant device tracker
-- battery-conscious: balanced tracking while stationary, high accuracy while moving
+- battery-conscious: balanced tracking in every state, periodic GPS fixes while moving, tracking paused inside zones
 
 # Build Commands
 - `./gradlew assembleDebug` - Build the debug version of the app.

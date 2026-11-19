@@ -65,13 +65,14 @@ Precise location is based on the same Google Play services fused-location techno
 The implemented design combines:
 
 1. Low-power activity recognition to identify walking, cycling, or driving.
-2. Wi-Fi network loss as an opportunistic movement trigger.
-3. A short precise-location burst when movement is suspected.
-4. A stationary timeout that stops precise requests.
-5. A configurable stationary/background scan interval.
+2. Wi-Fi network loss as an opportunistic trigger for a balanced verification fix.
+3. Periodic GPS one-shot fixes while movement is detected, instead of continuous GPS.
+4. A stationary timeout and a 15-minute moving limit that end the moving state.
+5. A configurable continuous scan interval at balanced power accuracy.
 6. An optional periodic fallback so the location does not become indefinitely stale.
+7. Pausing all tracking inside known zones (see `04-geofencing.md`).
 
-The moving request uses high accuracy at a 30-second interval with a 60-second maximum delay when precise mode and fine permission are available. Stationary/background requests use a configurable interval from 30–600 seconds, defaulting to 60 seconds, with batching up to three times the interval. When stationary publishing is enabled, a separate alarm requests a fresh location and publishes it at the configured fallback interval; this does not depend on the fused provider delivering a continuous stream of fixes. Android background execution, vendor battery management, and permission state can prevent strict delivery guarantees.
+The continuous request uses balanced power accuracy in every movement state, at a configurable interval from 30–600 seconds (default 120 seconds) with batching up to the interval. While moving, and only when precise mode and fine permission are available, the app takes a high-accuracy one-shot fix on entering the moving state and then at most once per GPS fix interval (default 5 minutes, configurable 1–30 minutes). Without GPS, coarse network fixes up to 200 m are published while moving. When stationary publishing is enabled, a separate alarm requests a fresh location and publishes it at the configured fallback interval; this does not depend on the fused provider delivering a continuous stream of fixes. Android background execution, vendor battery management, and permission state can prevent strict delivery guarantees. The state machine and its transitions are documented in `docs/movement-state-diagram.md`.
 
 The user can disable background location collection. When disabled, location and activity detection remain active while an app activity is visible and are removed when the app enters the background. When enabled, the PendingIntent-based registrations continue in the background.
 
@@ -96,7 +97,7 @@ The app will need:
 - `ACCESS_FINE_LOCATION` for precise mode
 - `ACCESS_BACKGROUND_LOCATION` for ongoing background tracking
 - `ACTIVITY_RECOGNITION` for movement detection
-- A foreground service is not part of the current v1 implementation; it remains a possible future enhancement for sustained precise tracking.
+- A location-type foreground service delivers location updates through a direct callback while it runs. When the system destroys it, tracking stays enabled and falls back to PendingIntent delivery; only the user's stop action disables tracking.
 
 On Android 11 and later, foreground location permission should be granted before requesting background location. Android 12 and later let users downgrade an app to approximate location, so the app must detect and explain insufficient precision.
 

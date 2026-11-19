@@ -71,7 +71,10 @@ class LocationCoordinator(
     private val filter: LocationFilter = LocationFilter(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val zoneEntryHysteresisMs: Long = 60_000L,
-    private val zoneEntryWindowMs: Long = 10 * 60_000L
+    private val zoneEntryWindowMs: Long = 10 * 60_000L,
+    private val currentLocation: (CurrentLocationRequest) -> Task<Location> = {
+        fusedCurrentLocation(context, it)
+    }
 ) {
 
     private val zoneManager = ZoneManager(
@@ -103,6 +106,7 @@ class LocationCoordinator(
     private var registeredLocationKey: LocationRegistrationKey? = null
     private var activityRegistrationActive = false
     @Volatile private var lastLocationCallbackTimeMs = 0L
+    private var lastGpsFixRequestMs = 0L
     private val _uiState = MutableStateFlow(currentUiState())
 
     val uiState: StateFlow<TrackingUiState> = _uiState
@@ -209,6 +213,31 @@ class LocationCoordinator(
         scheduleHeartbeat()
     }
 
+    /**
+     * Turning geofencing off must also end a zone pause: the current zone
+     * would otherwise keep tracking paused, and the still-registered
+     * geofences would keep pausing it on every ENTER.
+     */
+    fun setGeofencingEnabled(enabled: Boolean) {
+        if (settings.geofencingEnabled == enabled) return
+        settings.geofencingEnabled = enabled
+        if (!settings.trackingEnabled) return
+        if (enabled) {
+            zoneManager.registerGeofences()
+            zonesSubscriber.start()
+            return
+        }
+        clearPendingZoneEntry()
+        zonesSubscriber.stop()
+        zoneManager.removeGeofences()
+        if (settings.currentZoneId != null) {
+            settings.currentZoneId = null
+            diagnostics.record("zone_pause_released reason=geofencing_disabled")
+            publishUiState()
+        }
+        ensureRegistered()
+    }
+
     fun refreshZones() {
         if (!settings.geofencingEnabled) return
         zonesSubscriber.start()
@@ -217,12 +246,73 @@ class LocationCoordinator(
     /** Return the zone names currently cached on this device. */
     fun getCachedZoneNames(): List<String> = zoneManager.getZones().map { it.name }
 
-    fun onHeartbeat() {
+    /**
+     * [onComplete] runs once the heartbeat's asynchronous work (the current
+     * zone check) has finished, so the caller can keep the device awake until
+     * then.
+     */
+    fun onHeartbeat(onComplete: () -> Unit = {}) {
         checkLocationCallbackHealth()
         if (settings.geofencingEnabled) zoneManager.registerGeofences()
         ensureRegistered()
         // Backstop: expire a never-confirmed entry even if no fixes arrive.
         expirePendingZoneEntryIfDue(clock())
+        verifyCurrentZone(onComplete)
+    }
+
+    /**
+     * While paused in a zone only a geofence EXIT resumes tracking, and an EXIT
+     * can be late or lost: geofences are evaluated only as often as location is
+     * computed, and re-registration has no initial EXIT trigger. The heartbeat
+     * therefore checks one fix against the current zone and exits it when the
+     * fix is outside the radius by more than its own accuracy.
+     */
+    private fun verifyCurrentZone(onComplete: () -> Unit) {
+        val zoneId = settings.currentZoneId
+        if (zoneId == null || !settings.trackingEnabled || roamingPaused) {
+            onComplete()
+            return
+        }
+        oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_VERIFY_MAX_AGE_MS)
+            .addOnCompleteListener { task ->
+                try {
+                    if (task.isSuccessful) {
+                        exitZoneIfClearlyOutside(zoneId, task.result)
+                    } else {
+                        diagnostics.record("zone_verify_failed id=$zoneId ${task.exception?.javaClass?.simpleName}")
+                    }
+                } finally {
+                    onComplete()
+                }
+            }
+    }
+
+    private fun exitZoneIfClearlyOutside(zoneId: String, location: Location?) {
+        if (location == null || settings.currentZoneId != zoneId) return
+        if (isClearlyOutsideZone(zoneId, location.toFix())) {
+            diagnostics.record("zone_stale_exit id=$zoneId")
+            onZoneExited(zoneId, location)
+        }
+    }
+
+    private fun isClearlyOutsideZone(zoneId: String, fix: LocationFix): Boolean {
+        val zone = zoneManager.getZone(zoneId)
+        if (zone == null) {
+            diagnostics.record("zone_verify id=$zoneId reason=zone_not_found")
+            return true
+        }
+        val reason = filter.validate(fix, clock(), settings.maxLocationAgeMs, Float.MAX_VALUE)
+        if (reason != null) {
+            diagnostics.record("zone_verify id=$zoneId reason=${reason.name.lowercase()}")
+            return false
+        }
+        val distance = GeoMath.distanceMeters(fix.latitude, fix.longitude, zone.latitude, zone.longitude)
+        val outside = distance - fix.accuracyMeters > zone.radius
+        diagnostics.record(
+            "zone_verify id=$zoneId distanceMeters=${"%.0f".format(distance)} " +
+                "accuracy=${fix.accuracyMeters} outside=$outside"
+        )
+        return outside
     }
 
     /**
@@ -282,11 +372,40 @@ class LocationCoordinator(
             )
         }
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
-        if (enforceHighAccuracyLimit(clock())) return
         val now = clock()
+        // The cap only resets the state; the batch is still processed so a
+        // fix proving real travel can resume moving and is published.
+        enforceHighAccuracyLimit(now)
         for (location in locations) {
             handleFix(location.toFix(), now)
         }
+        requestGpsFixIfDue(now)
+    }
+
+    /** GPS is used only when the user enabled it and fine location is granted. */
+    private fun gpsAllowed(): Boolean = settings.preciseMode && permissions.fineGranted()
+
+    /**
+     * While moving, the continuous request stays balanced and GPS is used for
+     * one fix every [LocationSettings.gpsFixIntervalMs]. Driven by the switch
+     * to moving and the continuous callbacks, so it adds no alarm or wakeup.
+     */
+    private fun requestGpsFixIfDue(now: Long) {
+        if (settings.movementState != MovementState.MOVING || !gpsAllowed()) return
+        if (lastGpsFixRequestMs > 0L && now - lastGpsFixRequestMs < settings.gpsFixIntervalMs) return
+        lastGpsFixRequestMs = now
+        diagnosticsRecord("gps_fix_requested")
+        oneShotLocationRequest(GPS_FIX_TIMEOUT_MS)
+            .addOnSuccessListener { location ->
+                if (location == null) {
+                    diagnosticsRecord("gps_fix_failed reason=no_location")
+                } else if (settings.trackingEnabled && !roamingPaused && !zonePaused) {
+                    handleFix(location.toFix(), clock())
+                }
+            }
+            .addOnFailureListener {
+                diagnosticsRecord("gps_fix_failed ${it.javaClass.simpleName}")
+            }
     }
 
     /** Requests one fresh fix so starting tracking gives immediate feedback. */
@@ -304,7 +423,6 @@ class LocationCoordinator(
             }
     }
 
-    @SuppressLint("MissingPermission")
     private fun oneShotLocationRequest(
         durationMs: Long,
         forceBalanced: Boolean = false,
@@ -326,9 +444,7 @@ class LocationCoordinator(
             .setMaxUpdateAgeMillis(maxUpdateAgeMillis)
             .setDurationMillis(durationMs)
             .build()
-        val cancellation = CancellationTokenSource()
-        return LocationServices.getFusedLocationProviderClient(context)
-            .getCurrentLocation(request, cancellation.token)
+        return currentLocation(request)
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -342,24 +458,20 @@ class LocationCoordinator(
      * Periodic stationary publish. Driven by an alarm rather than by incoming
      * fixes: a stationary device (or an emulator with a static mock location)
      * may not produce new fixes on its own, so the cadence would never fire.
+     * The fix is balanced (GPS is only used while moving) and goes through
+     * the normal fix handling, so it also counts for movement detection.
      */
     fun onPeriodicPublish() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
         if (settings.movementState != MovementState.STATIONARY || !settings.periodicFallbackEnabled) {
             return
         }
-        oneShotLocationRequest(settings.periodicFallbackIntervalMs)
+        oneShotLocationRequest(PERIODIC_FIX_TIMEOUT_MS, forceBalanced = true)
             .addOnSuccessListener { location ->
                 if (location == null) {
                     Log.w(TAG, "Periodic publish: no location available")
-                } else {
-                    val fix = location.toFix()
-                    val result = filter.evaluate(fix, clock(), buildFilterContext())
-                    if (result is LocationDecision.Accept) {
-                        publish(fix)
-                    } else if (result is LocationDecision.Reject) {
-                        Log.d(TAG, "Periodic publish skipped: ${result.reason}")
-                    }
+                } else if (settings.trackingEnabled && !roamingPaused && !zonePaused) {
+                    handleFix(location.toFix(), clock())
                 }
                 if (settings.trackingEnabled) schedulePeriodicPublish()
             }
@@ -374,10 +486,7 @@ class LocationCoordinator(
         evaluatePendingZoneEntry(fix, now)
         if (zonePaused) return // the fix confirmed a zone entry; tracking is paused
         if (!controller.isReliableFix(fix)) {
-            diagnosticsRecord(
-                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
-                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
-            )
+            handleCoarseFix(fix, now)
             return
         }
 
@@ -407,41 +516,35 @@ class LocationCoordinator(
                 "distanceFromPublished=${publishedDistance ?: -1.0} state=${settings.movementState}"
         )
 
-        val movementCooldownActive =
-            settings.movementState == MovementState.STATIONARY &&
-                now < settings.activityCooldownUntilMs
-        val decision = if (movementCooldownActive) {
-            MovementDecision.NoChange()
-        } else {
-            controller.observe(
-                MovementEvidence.Fix(fix),
-                settings.movementState,
-                settings.lastKnownLat,
-                settings.lastKnownLon,
-                settings.hasLastKnown(),
-                settings.accumulatedDistanceMeters,
-                settings.lastMovementEvidenceTimeMs,
-                now
-            )
-        }
+        // The high-accuracy cooldown only silences activity recognition: a fix
+        // that accumulates the movement distance is real travel and resumes
+        // moving mode. After a coarse reference the fix only re-anchors, so the
+        // coarse fix's error is not counted as travel.
+        val reliableReference = hasReliableReference()
+        val decision = controller.observe(
+            MovementEvidence.Fix(fix),
+            settings.movementState,
+            settings.lastKnownLat,
+            settings.lastKnownLon,
+            reliableReference,
+            settings.accumulatedDistanceMeters,
+            settings.lastMovementEvidenceTimeMs,
+            now
+        )
 
         if (decision.isEvidence) {
             settings.lastMovementEvidenceTimeMs = now
-            settings.accumulatedDistanceMeters = 0f
-        } else if (movementCooldownActive) {
             settings.accumulatedDistanceMeters = 0f
         } else {
             settings.accumulatedDistanceMeters = controller.nextAccumulatedMeters(
                 settings.lastKnownLat,
                 settings.lastKnownLon,
-                settings.hasLastKnown(),
+                reliableReference,
                 settings.accumulatedDistanceMeters,
                 fix
             )
         }
-        settings.lastKnownLat = fix.latitude
-        settings.lastKnownLon = fix.longitude
-        settings.lastKnownTimeMs = fix.timeMs
+        updateReference(fix)
 
         applyStateChange(decision)
 
@@ -453,6 +556,72 @@ class LocationCoordinator(
             is LocationDecision.Reject -> {
                 diagnosticsRecord("location_decision reject reason=${result.reason}")
                 Log.d(TAG, "Fix not published: ${result.reason}")
+            }
+        }
+    }
+
+    /**
+     * A coarse fix clearly far from the reference position is movement
+     * evidence, so travel is detected when only network fixes arrive. Such a
+     * fix becomes the reference, so the next fix is compared with where the
+     * device is now rather than where the trip started; jitter around the
+     * reference leaves it in place.
+     */
+    private fun handleCoarseFix(fix: LocationFix, now: Long) {
+        val decision = controller.observeCoarseFix(
+            fix,
+            settings.movementState,
+            settings.lastKnownLat,
+            settings.lastKnownLon,
+            settings.lastKnownAccuracyMeters,
+            settings.hasLastKnown()
+        )
+        if (decision.isEvidence || !settings.hasLastKnown()) updateReference(fix)
+        if (decision.isEvidence) {
+            diagnosticsRecord("location_fix coarse_movement_evidence accuracy=${fix.accuracyMeters}")
+            settings.lastMovementEvidenceTimeMs = now
+            settings.accumulatedDistanceMeters = 0f
+            applyStateChange(decision)
+        } else {
+            diagnosticsRecord(
+                "location_fix rejected_for_movement accuracy=${fix.accuracyMeters} " +
+                    "max=${MovementStateController.MOVEMENT_MAX_ACCURACY_METERS}"
+            )
+        }
+        if (settings.movementState == MovementState.MOVING && !gpsAllowed()) {
+            publishCoarseFix(fix, now)
+        }
+    }
+
+    private fun hasReliableReference(): Boolean = settings.hasLastKnown() &&
+        settings.lastKnownAccuracyMeters <= MovementStateController.MOVEMENT_MAX_ACCURACY_METERS
+
+    private fun updateReference(fix: LocationFix) {
+        settings.lastKnownLat = fix.latitude
+        settings.lastKnownLon = fix.longitude
+        settings.lastKnownTimeMs = fix.timeMs
+        settings.lastKnownAccuracyMeters = fix.accuracyMeters
+    }
+
+    /**
+     * Without GPS a moving device mostly gets network fixes, so those are
+     * published up to a looser cap. Only a move from the last published
+     * position larger than the fix's own accuracy counts, so coarse jitter is
+     * never reported as movement.
+     */
+    private fun publishCoarseFix(fix: LocationFix, now: Long) {
+        val cap = maxOf(settings.maxAccuracyMeters, COARSE_PUBLISH_MAX_ACCURACY_METERS)
+        val ctx = buildFilterContext().copy(
+            maxAccuracyMeters = cap,
+            minDistanceMeters = maxOf(settings.minDistanceMeters, fix.accuracyMeters)
+        )
+        when (val result = filter.evaluate(fix, now, ctx)) {
+            is LocationDecision.Accept -> {
+                diagnosticsRecord("location_decision accept coarse accuracy=${fix.accuracyMeters}")
+                publish(fix, cap)
+            }
+            is LocationDecision.Reject -> {
+                diagnosticsRecord("location_decision reject coarse reason=${result.reason}")
             }
         }
     }
@@ -484,8 +653,8 @@ class LocationCoordinator(
             Log.w(TAG, "Fix accepted but PubNub not configured; skipping publish")
             return
         }
-        storePendingIfNewer(fix)
-        publishAttempt(fix)
+        storePendingIfNewer(fix, accuracyCap)
+        publishAttempt(fix, accuracyCap)
     }
 
     private fun validatePublishFix(
@@ -498,20 +667,20 @@ class LocationCoordinator(
         accuracyCap
     )
 
-    private fun storePendingIfNewer(fix: LocationFix) {
-        val pending = settings.pendingLocation
-        if (pending == null || fix.timeMs >= pending.timeMs) {
-            settings.pendingLocation = fix
+    private fun storePendingIfNewer(fix: LocationFix, accuracyCap: Float) {
+        val pending = settings.pendingPublish
+        if (pending == null || fix.timeMs >= pending.fix.timeMs) {
+            settings.pendingPublish = PendingPublish(fix, accuracyCap)
         }
     }
 
-    private fun publishAttempt(fix: LocationFix) {
+    private fun publishAttempt(fix: LocationFix, accuracyCap: Float) {
         // Serialized via publishLock: a second fix queues as pending instead of
         // racing the in-flight publish (out-of-order completion would corrupt
         // the last-published baseline).
         val start = synchronized(publishLock) {
             if (publishInFlight) {
-                storePendingIfNewer(fix)
+                storePendingIfNewer(fix, accuracyCap)
                 false
             } else {
                 publishInFlight = true
@@ -521,21 +690,21 @@ class LocationCoordinator(
         if (!start) return
         scope.launch {
             try {
-                publisher.publish(fix)
+                publisher.publish(fix, accuracyCap)
                     .onSuccess {
                         markPublished(fix)
                         diagnosticsRecord("publish success state=${settings.movementState}")
                         Log.i(TAG, "Location published (state=${settings.movementState})")
                     }
                     .onFailure {
-                        val invalidReason = validatePublishFix(fix)
+                        val invalidReason = validatePublishFix(fix, accuracyCap)
                         val category = PublishFailureMapper.categoryFor(it)
                         if (invalidReason != null || isLocationRejected(category)) {
                             clearPendingIfMatches(fix)
                             val reason = invalidReason?.name?.lowercase() ?: category.name.lowercase()
                             diagnosticsRecord("publish rejected reason=$reason")
                         } else {
-                            storePendingIfNewer(fix)
+                            storePendingIfNewer(fix, accuracyCap)
                             diagnosticsRecord("publish failure category=$category")
                             Log.w(TAG, "Publish failed: $category")
                         }
@@ -549,7 +718,7 @@ class LocationCoordinator(
     private fun finishPublish() {
         val next = synchronized(publishLock) {
             publishInFlight = false
-            settings.pendingLocation
+            settings.pendingPublish
         }
         if (next != null) retryPendingPublish()
     }
@@ -565,12 +734,11 @@ class LocationCoordinator(
             }
         }
         if (!start) return
-        val pending = settings.pendingLocation
-        if (pending == null) {
+        val (pending, accuracyCap) = settings.pendingPublish ?: run {
             synchronized(publishLock) { publishInFlight = false }
             return
         }
-        val invalidReason = validatePublishFix(pending)
+        val invalidReason = validatePublishFix(pending, accuracyCap)
         if (invalidReason != null) {
             clearPendingIfMatches(pending)
             diagnosticsRecord("pending_publish discarded reason=${invalidReason.name.lowercase()}")
@@ -579,13 +747,13 @@ class LocationCoordinator(
         }
         scope.launch {
             try {
-                publisher.publish(pending)
+                publisher.publish(pending, accuracyCap)
                     .onSuccess {
                         markPublished(pending)
                         diagnosticsRecord("pending_publish success")
                     }
                     .onFailure {
-                        val reason = validatePublishFix(pending)
+                        val reason = validatePublishFix(pending, accuracyCap)
                         val category = PublishFailureMapper.categoryFor(it)
                         if (reason != null || isLocationRejected(category)) {
                             clearPendingIfMatches(pending)
@@ -602,8 +770,8 @@ class LocationCoordinator(
     }
 
     private fun clearPendingIfMatches(fix: LocationFix) {
-        if (settings.pendingLocation?.timeMs == fix.timeMs) {
-            settings.pendingLocation = null
+        if (settings.pendingPublish?.fix?.timeMs == fix.timeMs) {
+            settings.pendingPublish = null
         }
     }
 
@@ -612,9 +780,7 @@ class LocationCoordinator(
             category == PublishFailureCategory.INVALID_LOCATION
 
     private fun markPublished(fix: LocationFix) {
-        if (settings.pendingLocation?.timeMs == fix.timeMs) {
-            settings.pendingLocation = null
-        }
+        clearPendingIfMatches(fix)
         synchronized(publishLock) {
             // An older fix must never overwrite the baseline of a newer one.
             if (fix.timeMs < lastPublishedFixTimeMs) return
@@ -674,6 +840,8 @@ class LocationCoordinator(
 
     fun onBurstEnd() {
         if (!settings.trackingEnabled || roamingPaused || zonePaused) return
+        // A leftover alarm from an earlier MOVING session must not reschedule itself.
+        if (settings.movementState != MovementState.MOVING) return
         // The cap must win even when fixes keep arriving as movement evidence.
         if (enforceHighAccuracyLimit(clock())) return
         val decision = controller.burstExpired(
@@ -696,6 +864,11 @@ class LocationCoordinator(
      * confirmation does not depend on a background-frozen hysteresis delay or
      * a fresh one-shot that may return nothing.
      *
+     * When a *different* zone is already current (so tracking is paused and no
+     * fix is ever received again), the triggering location can also confirm a
+     * zone switch instead: it is the only fix the coordinator can obtain, and
+     * without it a stale current zone pauses tracking forever.
+     *
      * A triggering fix that is too coarse to trust still arms the pending
      * entry and is reported diagnostically: the geofence engine decided the
      * device is inside the zone, so the entry is kept (and recorded) rather
@@ -703,8 +876,20 @@ class LocationCoordinator(
      * backstop: it expires the entry if no usable fix arrives.
      */
     fun onZoneEntered(zoneId: String, triggeringLocation: Location? = null) {
+        if (!settings.geofencingEnabled) {
+            // An event already in flight when geofencing was turned off.
+            diagnostics.record("zone_enter_ignored id=$zoneId reason=geofencing_disabled")
+            return
+        }
         val now = clock()
-        if (settings.currentZoneId == zoneId) return
+        if (settings.currentZoneId == zoneId) {
+            // The engine re-fires ENTER for the zone we are already in (the
+            // heartbeat re-registers geofences; an initial trigger then
+            // re-announces the current state). Nothing changes, but record it
+            // so a stale pause is visible in exports instead of silent.
+            diagnostics.record("zone_enter_ignored id=$zoneId reason=already_current")
+            return
+        }
         val lastTransition = settings.lastZoneTransitionMs
         if (settings.currentZoneId != null && lastTransition > 0L &&
             now - lastTransition < settings.geofenceDebounceMs
@@ -713,8 +898,12 @@ class LocationCoordinator(
             Log.i(TAG, "Zone enter debounced: $zoneId")
             return
         }
+        val triggeringFix = triggeringLocation?.toFix()
+        val currentZoneId = settings.currentZoneId
+        if (currentZoneId != null && confirmZoneSwitch(currentZoneId, zoneId, triggeringFix, now)) {
+            return
+        }
         if (zoneEntryHysteresisMs > 0L) {
-            val triggeringFix = triggeringLocation?.toFix()
             val coarse = triggeringFix?.let { isCoarseForZone(zoneId, it, now) } ?: false
             pendingZoneEntryJob?.cancel()
             pendingZoneEntryId = zoneId
@@ -724,7 +913,9 @@ class LocationCoordinator(
                 "zone_enter_pending id=$zoneId delayMs=$zoneEntryHysteresisMs " +
                     "triggering=${triggeringFix != null}$coarseFlag"
             )
-            if (!confirmZoneEntryFromFix(zoneId, triggeringFix, now)) {
+            // A failed switch has already evaluated the triggering fix.
+            val confirmed = currentZoneId == null && confirmZoneEntryFromFix(zoneId, triggeringFix, now)
+            if (!confirmed) {
                 pendingZoneEntryJob = scope.launch {
                     delay(zoneEntryHysteresisMs)
                     confirmZoneEntry(zoneId)
@@ -760,12 +951,15 @@ class LocationCoordinator(
     /**
      * Applies the pending entry for [zoneId] when [fix] is usable for it.
      *
-     * Returns true when the entry was applied. A fix that is merely not usable
-     * (coarse, stale, or outside the radius) leaves the pending entry in place
-     * so it can be confirmed by a later fix; only a missing zone clears it.
+     * Returns true when the entry was applied (or, while a different zone is
+     * current, when the fix confirmed a switch to [zoneId]). A fix that is
+     * merely not usable (coarse, stale, or outside the radius) leaves the
+     * pending entry in place so it can be confirmed by a later fix; only a
+     * missing zone clears it.
      */
     private fun confirmZoneEntryFromFix(zoneId: String, fix: LocationFix?, now: Long): Boolean {
-        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) {
+        val currentZoneId = settings.currentZoneId
+        if (pendingZoneEntryId != zoneId || currentZoneId == zoneId) {
             return false
         }
         expirePendingZoneEntryIfDue(now)
@@ -774,6 +968,12 @@ class LocationCoordinator(
         }
         if (fix == null) {
             return false
+        }
+        if (currentZoneId != null) {
+            // A (possibly stale) zone is current: the fix confirms a switch to
+            // the pending zone rather than a plain entry, which is the only way
+            // a stale pause can be resolved while tracking stays paused.
+            return confirmZoneSwitch(currentZoneId, zoneId, fix, now)
         }
         val zone = zoneManager.getZone(zoneId)
         if (zone == null) {
@@ -804,12 +1004,83 @@ class LocationCoordinator(
     }
 
     /**
+     * Confirms a switch from [fromZoneId] to [toZoneId] when [fix] proves the
+     * device is in [toZoneId] and no longer in [fromZoneId].
+     *
+     * While a zone is current the coordinator is paused with no ongoing
+     * location request, so the only fix it can act on is a geofence event's
+     * triggering location. A stale current zone (the device is really
+     * elsewhere) then survives every heartbeat and every pending entry,
+     * because a pending entry for another zone can confirm an entry but can
+     * never move the current zone. This closes that trap: the switch is
+     * confirmed when the fix validates against the entered zone's zone-aware
+     * cap, sits inside that zone, and lies outside the current one. On success
+     * the current zone's departure fix is published, the entered zone becomes
+     * current, and the pause persists — the device is inside a zone either
+     * way, and a real EXIT for it resumes tracking as usual.
+     */
+    private fun confirmZoneSwitch(
+        fromZoneId: String,
+        toZoneId: String,
+        fix: LocationFix?,
+        now: Long
+    ): Boolean {
+        if (fix == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=no_fix")
+            return false
+        }
+        val toZone = zoneManager.getZone(toZoneId)
+        if (toZone == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=zone_not_found")
+            return false
+        }
+        val fromZone = zoneManager.getZone(fromZoneId)
+        if (fromZone == null) {
+            diagnostics.record("zone_switch_rejected from=$fromZoneId to=$toZoneId reason=from_zone_not_found")
+            return false
+        }
+        val reason = filter.validate(fix, now, settings.maxLocationAgeMs, accuracyCapForZone(toZone))
+        if (reason != null) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId reason=${reason.name.lowercase()}"
+            )
+            return false
+        }
+        val toDistance = GeoMath.distanceMeters(fix.latitude, fix.longitude, toZone.latitude, toZone.longitude)
+        if (toDistance > toZone.radius) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId " +
+                    "reason=outside toDistanceMeters=${"%.0f".format(toDistance)}"
+            )
+            return false
+        }
+        val fromDistance = GeoMath.distanceMeters(fix.latitude, fix.longitude, fromZone.latitude, fromZone.longitude)
+        if (fromDistance <= fromZone.radius) {
+            diagnostics.record(
+                "zone_switch_rejected from=$fromZoneId to=$toZoneId " +
+                    "reason=still_inside fromDistanceMeters=${"%.0f".format(fromDistance)}"
+            )
+            return false
+        }
+        // The fix is the device's new position: publish it under the entered
+        // zone's cap, which is the cap it was just validated against.
+        publish(fix, accuracyCapForZone(toZone))
+        clearPendingZoneEntry()
+        diagnostics.record("zone_switch from=$fromZoneId to=$toZoneId accuracy=${fix.accuracyMeters}")
+        Log.i(TAG, "Zone switch: $fromZoneId -> $toZoneId — stale pause resolved")
+        applyZoneEntered(toZoneId, now)
+        return true
+    }
+
+    /**
      * Hysteresis fallback: after [zoneEntryHysteresisMs] ask for one fresh fix
      * and confirm from it. The relaxed [maxUpdateAgeMillis] lets the provider
      * answer with a recent cached fix instead of null when no new fix exists.
+     * While a different zone is current the same fix confirms a zone switch,
+     * so a stale pause is also resolved by this background-capable fallback.
      */
     private fun confirmZoneEntry(zoneId: String) {
-        if (pendingZoneEntryId != zoneId || settings.currentZoneId != null) return
+        if (pendingZoneEntryId != zoneId || settings.currentZoneId == zoneId) return
         oneShotLocationRequest(30_000L, forceBalanced = true, maxUpdateAgeMillis = ZONE_CONFIRM_MAX_AGE_MS)
             .addOnSuccessListener { location ->
                 if (pendingZoneEntryId != zoneId) return@addOnSuccessListener
@@ -852,20 +1123,31 @@ class LocationCoordinator(
      */
     private fun onZonesUpdated(zoneIds: List<String>) {
         scope.launch {
-            val pendingZoneId = pendingZoneEntryId ?: return@launch
-            if (zoneIds.contains(pendingZoneId)) return@launch
-            clearPendingZoneEntry()
-            diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+            val pendingZoneId = pendingZoneEntryId
+            if (pendingZoneId != null && !zoneIds.contains(pendingZoneId)) {
+                clearPendingZoneEntry()
+                diagnostics.record("zone_enter_cancelled id=$pendingZoneId reason=zone_removed")
+            }
+            // ZoneManager clears a current zone that is no longer listed; resume
+            // now instead of waiting for the next heartbeat.
+            if (zonePaused && settings.currentZoneId == null) {
+                diagnostics.record("zone_pause_released reason=zone_removed")
+                publishUiState()
+                ensureRegistered()
+            }
         }
     }
 
     /**
-     * Clears the pending entry once the bounded confirmation window has elapsed,
-     * so a never-confirmed entry (e.g. only coarse fixes) does not linger.
+     * Clears the pending entry once the bounded confirmation window has
+     * elapsed, so a never-confirmed entry (e.g. only coarse fixes) does not
+     * linger. The expiry applies even while a (possibly stale) zone is
+     * current: the pending entry only carries the armed zone for the
+     * confirmation (or switch) attempt, so dropping it after the window is
+     * safe — a new ENTER/DWELL re-arms it.
      */
     private fun expirePendingZoneEntryIfDue(now: Long) {
         val zoneId = pendingZoneEntryId ?: return
-        if (settings.currentZoneId != null) return
         if (pendingZoneEntryArmedAtMs > 0L && now - pendingZoneEntryArmedAtMs > zoneEntryWindowMs) {
             diagnostics.record("zone_enter_expired id=$zoneId")
             clearPendingZoneEntry()
@@ -876,10 +1158,11 @@ class LocationCoordinator(
      * Re-evaluates the pending zone entry against a fresh fix, so an entry that
      * could not be confirmed by the triggering location (or the one-shot) is
      * confirmed as soon as a usable fix arrives within the bounded window.
+     * While a different zone is current the same fix confirms a zone switch
+     * instead, which is what resolves a stale pause.
      */
     private fun evaluatePendingZoneEntry(fix: LocationFix, now: Long) {
         val zoneId = pendingZoneEntryId ?: return
-        if (settings.currentZoneId != null) return
         expirePendingZoneEntryIfDue(now)
         if (pendingZoneEntryId != zoneId) return // expired in the call above
         confirmZoneEntryFromFix(zoneId, fix, now)
@@ -900,6 +1183,12 @@ class LocationCoordinator(
         diagnostics.record("zone_entered id=$zoneId")
         Log.i(TAG, "Zone entered: $zoneId — pausing tracking")
         if (settings.trackingEnabled) {
+            // Arriving ends the trip; without this the state would stay MOVING
+            // for the whole stay and hit the moving limit on departure.
+            if (settings.movementState == MovementState.MOVING) {
+                diagnostics.record("state_transition moving_to_stationary reason=zone_entered")
+                applyStateChange(MovementDecision.ToStationary(MovementState.MOVING))
+            }
             zonePaused = true
             removeLocationRegistration()
             removeActivityRegistration()
@@ -968,9 +1257,9 @@ class LocationCoordinator(
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> MOVING")
                 diagnostics.record("state_transition stationary_to_moving")
-                registerLocationUpdates()
                 scheduleBurstRevert()
                 cancelPeriodicPublish()
+                requestGpsFixIfDue(clock())
             }
 
             is MovementDecision.ToStationary -> {
@@ -979,7 +1268,6 @@ class LocationCoordinator(
                 settings.accumulatedDistanceMeters = 0f
                 Log.i(TAG, "State -> STATIONARY")
                 diagnostics.record("state_transition moving_to_stationary")
-                registerLocationUpdates()
                 cancelBurstAlarm()
                 if (settings.periodicFallbackEnabled) schedulePeriodicPublish()
                 else cancelPeriodicPublish()
@@ -1011,6 +1299,7 @@ class LocationCoordinator(
             settings.movingStartedTimeMs = 0L
             settings.activityCooldownUntilMs = now + ACTIVITY_COOLDOWN_MS
             settings.accumulatedDistanceMeters = 0f
+            cancelBurstAlarm()
             diagnostics.record("stale_moving_state_reset")
         }
     }
@@ -1066,20 +1355,12 @@ class LocationCoordinator(
         if (!hasLocationPermission()) return
         val client = LocationServices.getFusedLocationProviderClient(context)
         val registrationKey = LocationRegistrationKey(
-            state = settings.movementState,
-            precise = settings.preciseMode,
-            fineGranted = permissions.fineGranted(),
-            stationaryIntervalMs = settings.backgroundScanIntervalMs,
+            intervalMs = settings.backgroundScanIntervalMs,
             direct = directLocationCallback != null
         )
         if (registeredLocationKey == registrationKey) return
         removeLocationRegistration()
-        val request = requestFactory.forState(
-            settings.movementState,
-            settings.preciseMode,
-            permissions.fineGranted(),
-            settings.backgroundScanIntervalMs
-        )
+        val request = requestFactory.balanced(settings.backgroundScanIntervalMs)
         val callback = directLocationCallback
         if (callback != null && directLocationLooper != null) {
             runCatching {
@@ -1306,8 +1587,10 @@ class LocationCoordinator(
     private fun scheduleHeartbeat() {
         val alarm = alarmManager() ?: return
         val triggerAt = SystemClock.elapsedRealtime() + HEARTBEAT_INTERVAL_MS
+        // Wakeup: a device paused in a zone sits in Doze with nothing else to
+        // wake it, and the heartbeat's zone check must still run on time.
         runCatching {
-            alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, heartbeatPendingIntent())
+            alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, heartbeatPendingIntent())
         }.onFailure { Log.w(TAG, "Failed to schedule heartbeat", it) }
     }
 
@@ -1328,6 +1611,15 @@ class LocationCoordinator(
         /** How stale a one-shot fix may be when confirming a zone entry. */
         private const val ZONE_CONFIRM_MAX_AGE_MS = 60_000L
 
+        /** How stale a cached fix may be for the heartbeat's current-zone check. */
+        private const val ZONE_VERIFY_MAX_AGE_MS = 2 * 60_000L
+
+        private const val GPS_FIX_TIMEOUT_MS = 30_000L
+        private const val PERIODIC_FIX_TIMEOUT_MS = 30_000L
+
+        /** Accuracy cap for network fixes published while moving without GPS. */
+        private const val COARSE_PUBLISH_MAX_ACCURACY_METERS = 200f
+
         private const val REQUEST_CODE_LOCATION = 1
         private const val REQUEST_CODE_ACTIVITY = 2
         private const val REQUEST_CODE_BURST_END = 3
@@ -1336,10 +1628,12 @@ class LocationCoordinator(
     }
 
     private data class LocationRegistrationKey(
-        val state: MovementState,
-        val precise: Boolean,
-        val fineGranted: Boolean,
-        val stationaryIntervalMs: Long,
+        val intervalMs: Long,
         val direct: Boolean
     )
 }
+
+@SuppressLint("MissingPermission")
+private fun fusedCurrentLocation(context: Context, request: CurrentLocationRequest): Task<Location> =
+    LocationServices.getFusedLocationProviderClient(context)
+        .getCurrentLocation(request, CancellationTokenSource().token)

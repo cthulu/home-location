@@ -32,10 +32,12 @@ class LocationSettings(context: Context) {
         private const val KEY_BURST_DURATION = "burst_duration_ms"
         private const val KEY_BACKGROUND_LOCATION_ENABLED = "background_location_enabled"
         private const val KEY_BACKGROUND_SCAN_INTERVAL = "background_scan_interval_ms"
+        private const val KEY_GPS_FIX_INTERVAL = "gps_fix_interval_ms"
         private const val KEY_MOVEMENT_STATE = "movement_state"
         private const val KEY_LAST_KNOWN_LAT = "last_known_lat"
         private const val KEY_LAST_KNOWN_LON = "last_known_lon"
         private const val KEY_LAST_KNOWN_TIME = "last_known_time"
+        private const val KEY_LAST_KNOWN_ACCURACY = "last_known_accuracy_meters"
         private const val KEY_LAST_PUBLISHED_LAT = "last_published_lat"
         private const val KEY_LAST_PUBLISHED_LON = "last_published_lon"
         private const val KEY_LAST_PUBLISHED_TIME = "last_published_time"
@@ -86,7 +88,7 @@ class LocationSettings(context: Context) {
         get() = prefs.getBoolean(KEY_TRACKING_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_TRACKING_ENABLED, value).apply()
 
-    /** When true and fine location is granted, the moving state uses high-accuracy updates. */
+    /** When true and fine location is granted, the moving state takes periodic GPS fixes. */
     var preciseMode: Boolean
         get() = prefs.getBoolean(KEY_PRECISE_MODE, true)
         set(value) = prefs.edit().putBoolean(KEY_PRECISE_MODE, value).apply()
@@ -140,6 +142,11 @@ class LocationSettings(context: Context) {
         get() = prefs.getLong(KEY_BACKGROUND_SCAN_INTERVAL, 2 * 60_000L)
         set(value) = prefs.edit().putLong(KEY_BACKGROUND_SCAN_INTERVAL, value).apply()
 
+    /** How often a GPS fix is taken while moving (when [preciseMode] allows GPS). */
+    var gpsFixIntervalMs: Long
+        get() = prefs.getLong(KEY_GPS_FIX_INTERVAL, 5 * MINUTE_MS)
+        set(value) = prefs.edit().putLong(KEY_GPS_FIX_INTERVAL, value).apply()
+
     fun isConfigured(): Boolean =
         publishKey.isNotBlank() && subscribeKey.isNotBlank()
 
@@ -165,6 +172,11 @@ class LocationSettings(context: Context) {
         get() = prefs.getLong(KEY_LAST_KNOWN_TIME, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_KNOWN_TIME, value).apply()
 
+    /** Accuracy of the last known fix; 0 for entries saved before it was stored. */
+    var lastKnownAccuracyMeters: Float
+        get() = prefs.getFloat(KEY_LAST_KNOWN_ACCURACY, 0f)
+        set(value) = prefs.edit().putFloat(KEY_LAST_KNOWN_ACCURACY, value).apply()
+
     var lastPublishedLat: Double
         get() = prefs.getLong(KEY_LAST_PUBLISHED_LAT, 0L).toDouble() / 1e7
         set(value) = prefs.edit().putLong(KEY_LAST_PUBLISHED_LAT, (value * 1e7).toLong()).apply()
@@ -181,26 +193,30 @@ class LocationSettings(context: Context) {
         get() = prefs.getFloat(KEY_LAST_PUBLISHED_ACCURACY, 0f)
         set(value) = prefs.edit().putFloat(KEY_LAST_PUBLISHED_ACCURACY, value).apply()
 
-    var pendingLocation: LocationFix?
+    /** Fix awaiting publish; entries saved before the cap existed fall back to [maxAccuracyMeters]. */
+    var pendingPublish: PendingPublish?
         get() = prefs.getString(KEY_PENDING_LOCATION, null)?.let { raw ->
             runCatching {
                 JSONObject(raw).let {
-                    LocationFix(
+                    val fix = LocationFix(
                         it.getDouble("latitude"),
                         it.getDouble("longitude"),
                         it.getDouble("accuracy").toFloat(),
                         it.getLong("time")
                     )
+                    val cap = it.optDouble("accuracyCap", maxAccuracyMeters.toDouble()).toFloat()
+                    PendingPublish(fix, cap)
                 }
             }.getOrNull()
         }
         set(value) {
             val raw = value?.let {
                 JSONObject().apply {
-                    put("latitude", it.latitude)
-                    put("longitude", it.longitude)
-                    put("accuracy", it.accuracyMeters)
-                    put("time", it.timeMs)
+                    put("latitude", it.fix.latitude)
+                    put("longitude", it.fix.longitude)
+                    put("accuracy", it.fix.accuracyMeters)
+                    put("time", it.fix.timeMs)
+                    put("accuracyCap", it.accuracyCapMeters)
                 }.toString()
             }
             prefs.edit().putString(KEY_PENDING_LOCATION, raw).apply()
@@ -263,6 +279,7 @@ class LocationSettings(context: Context) {
             .putLong(KEY_LAST_KNOWN_TIME, 0L)
             .putLong(KEY_LAST_KNOWN_LAT, 0L)
             .putLong(KEY_LAST_KNOWN_LON, 0L)
+            .putFloat(KEY_LAST_KNOWN_ACCURACY, 0f)
             .putLong(KEY_LAST_PUBLISHED_TIME, 0L)
             .putLong(KEY_LAST_PUBLISHED_LAT, 0L)
             .putLong(KEY_LAST_PUBLISHED_LON, 0L)
